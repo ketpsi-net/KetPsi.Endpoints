@@ -1,0 +1,127 @@
+name: DeployPackages
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+      - '*.*.*-preview'
+
+jobs:
+  deploy-prerequisite:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Fetch all branches
+        run: git fetch --all
+
+      - name: Verify tag format and branch
+        env:
+          CI_COMMIT_TAG: ${{ github.ref_name }}
+        run: |
+          branches=$(git show --no-patch --format=%D $CI_COMMIT_TAG)
+          echo "Branches: $branches"
+          echo "Tag: $CI_COMMIT_TAG"
+          if [[ $branches == *release* && $CI_COMMIT_TAG =~ ^[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]; then
+            echo "Matched Release preview tag pattern"
+            exit 0
+          elif [[ $branches == *main* && $CI_COMMIT_TAG =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Matched Main tag pattern"
+            exit 0
+          else
+            echo "Created tag does not meet requirements."
+            exit 1
+          fi
+      - name: Check for version match in version.props
+        env:
+          CI_COMMIT_TAG: ${{ github.ref_name }}
+        run: |
+          if ! grep -q "$CI_COMMIT_TAG" version.props; then
+            echo "Version mismatch: $CI_COMMIT_TAG not found in version.props"
+            exit 1
+          fi
+  deploy-abstractions:
+    needs: [deploy-prerequisite]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Pack KetPsi.Endpoints.Abstractions
+        id: pack-abstraction
+        uses: ./.github/workflows/actions/nuget-pack
+        with:
+          solution_path: KetPsi.Endpoints.slnx 
+          project_path: src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj
+      - name: Push KetPsi.Endpoints.Abstractions
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
+        uses: ./.github/workflows/actions/nuget-push
+        with:
+          package_path: 'pack/KetPsi.Endpoints.Abstractions.${{ github.ref_name }}.nupkg'
+
+  wait-for-abstractions-package:
+    needs: [deploy-abstractions]
+    runs-on: self-hosted
+    steps:
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+      - name: Wait for KetPsi.Endpoints.Abstractions to be available
+        env:
+          PACKAGE_NAME: KetPsi.Endpoints.Abstractions
+          PACKAGE_VERSION: ${{ github.ref_name }}
+        run: |
+          for i in {1..20}; do
+            dotnet nuget locals all --clear
+            if dotnet package search "$PACKAGE_NAME" --exact-match | grep "$PACKAGE_VERSION"; then
+              echo "Package is available on NuGet!"
+              exit 0
+            fi
+            echo "Waiting for package to be available on NuGet..."
+            sleep 30
+          done
+          echo "Package did not become available in time." >&2
+          exit 1
+
+  deploy-endpoint-http:
+    needs: [wait-for-abstractions-package]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Pack KetPsi.Endpoints.Http
+        id: pack-http
+        uses: ./.github/workflows/actions/nuget-pack
+        with:
+          solution_path: KetPsi.Endpoints.slnx 
+          project_path: src/http/KetPsi.Endpoints.Http/KetPsi.Endpoints.Http.csproj
+      - name: Push KetPsi.Endpoints.Http
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
+        uses: ./.github/workflows/actions/nuget-push
+        with:
+          package_path: 'pack/KetPsi.Endpoints.Http.${{ github.ref_name }}.nupkg'
+
+  # deploy-endpoint-grpc:
+  #   needs: [wait-for-abstractions-package]
+  #   runs-on: self-hosted
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v2
+  #     - name: Pack KetPsi.Endpoints.Grpc
+  #       id: pack-grpc
+  #       uses: ./.github/workflows/actions/nuget-pack
+  #       with:
+  #         solution_path: KetPsi.Logging.Extensions.slnx 
+  #         project_path: src/grpc/KetPsi.Endpoints.Grpc/KetPsi.Endpoints.Grpc.csproj
+  #     - name: Push KetPsi.Endpoints.Grpc
+  #       env:
+  #         NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+  #         NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
+  #       uses: ./.github/workflows/actions/nuget-push
+  #       with:
+  #         package_path: 'pack/KetPsi.Endpoints.Grpc.${{ github.ref_name }}.nupkg'
