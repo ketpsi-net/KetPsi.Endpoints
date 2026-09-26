@@ -995,8 +995,6 @@ public partial class EndpointGenerator : IIncrementalGenerator
     private static Diagnostic CreateDiagnosticInfo(string message, Location location) => Diagnostic.Create(
         new DiagnosticDescriptor("SGINFO", "Generator Trace", message, "Generator.Trace", DiagnosticSeverity.Warning, true), location);
 
-    private const string NO_NAME_FOUND = "Could not find a name for endpoint '{0}'. Consider adding .WithName(...).";
-
     private static (string RouteValue, string RouteExpression, string Chains, string Name, bool SkipApiGeneration, List<string> usingStatements, List<string> DiagMessages)
         ExtractRouteAndChains(InvocationExpressionSyntax baseMapInvocation, SemanticModel semanticModel)
     {
@@ -1082,7 +1080,7 @@ public partial class EndpointGenerator : IIncrementalGenerator
             {
                 skipApiGeneration = true;
             }
-            else if (memberName != "WithMicroserviceInfo")
+            else
             {
                 var sourceText = parentInvocation.SyntaxTree.GetText();
                 var chainSegment = sourceText.ToString(TextSpan.FromBounds(memberAccess.OperatorToken.SpanStart, parentInvocation.Span.End));
@@ -1091,8 +1089,7 @@ public partial class EndpointGenerator : IIncrementalGenerator
 
             currentInvocation = parentInvocation;
         }
-        if (string.IsNullOrEmpty(endpointName) && !string.IsNullOrEmpty(routeValue))
-            diagMessages.Add(string.Format(NO_NAME_FOUND, routeValue));
+       
         return (routeValue, routeExpression, chainsBuilder.ToString().Trim(), endpointName ?? string.Empty, skipApiGeneration, usingStatements, diagMessages);
     }
 
