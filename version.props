@@ -1,0 +1,44 @@
+<Project>
+    <PropertyGroup>
+        <Title>$(AssemblyName)</Title>
+        <Version>1.0.0-preview.1</Version>
+		<Authors>KetPsi ,MohamadArsalan Imamverdi</Authors>
+		<PackageId>$(AssemblyName)</PackageId>
+        <PackageProjectUrl>https://github.com/ketpsi-net/KetPsi.Endpoints</PackageProjectUrl>
+        <PackageReadmeFile>README.MD</PackageReadmeFile>
+        <RepositoryUrl>https://github.com/ketpsi-net/KetPsi.Endpoints</RepositoryUrl>
+        <PackageIcon>icon.png</PackageIcon>
+        <Icon>icon.png</Icon>
+		<Copyright>Copyright © 2027</Copyright>
+		<PackageLicenseFile>LICENSE</PackageLicenseFile>
+    </PropertyGroup>
+    <ItemGroup>
+         <None Include="README.MD">
+            <Pack>True</Pack>
+            <PackagePath>\</PackagePath>
+        </None>
+        
+       
+    </ItemGroup>
+
+	<ItemGroup  Condition=" '$(AssemblyName)' != 'KetPsi.Endpoints.Abstractions'">
+		<None Include="..\..\..\icon.png">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+		<None Include="..\..\..\LICENSE">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
+	<ItemGroup  Condition=" '$(AssemblyName)' == 'KetPsi.Endpoints.Abstractions'">
+		<None Include="..\..\icon.png">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+		<None Include="..\..\LICENSE">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
+</Project>

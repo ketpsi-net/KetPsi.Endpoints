@@ -1,0 +1,31 @@
+<Solution>
+  <Folder Name="/.github/" />
+  <Folder Name="/.github/workflows/">
+    <File Path=".github/workflows/deploy.workflow.yml" />
+    <File Path=".github/workflows/unit-tests.workflow.yml" />
+  </Folder>
+  <Folder Name="/.github/workflows/actions/" />
+  <Folder Name="/.github/workflows/actions/nuget-pack/">
+    <File Path=".github/workflows/actions/nuget-pack/action.yml" />
+  </Folder>
+  <Folder Name="/.github/workflows/actions/nuget-push/">
+    <File Path=".github/workflows/actions/nuget-push/action.yml" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".gitignore" />
+    <File Path="icon.png" />
+    <File Path="LICENSE" />
+    <File Path="README.MD" />
+    <File Path="version.props" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/src/http/">
+    <Project Path="src/http/KetPsi.Endpoints.Http.Generator/KetPsi.Endpoints.Http.Generator.csproj" />
+    <Project Path="src/http/KetPsi.Endpoints.Http/KetPsi.Endpoints.Http.csproj" Id="0f084b85-f63c-4e8d-b3dc-dbc3ee20ec9f" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj" Id="48a3f91d-ac06-4bb1-ae5f-19da252638e7" />
+  </Folder>
+</Solution>
