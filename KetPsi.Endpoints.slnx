@@ -1,7 +1,11 @@
 <Solution>
-
+ 
   <Folder Name="/src/">
     <Project Path="src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/src/http/">
+    <Project Path="src/http/KetPsi.Endpoints.Http.Generator/KetPsi.Endpoints.Http.Generator.csproj" />
+    <Project Path="src/http/KetPsi.Endpoints.Http/KetPsi.Endpoints.Http.csproj" Id="0f084b85-f63c-4e8d-b3dc-dbc3ee20ec9f" />
   </Folder>
 
 </Solution>
