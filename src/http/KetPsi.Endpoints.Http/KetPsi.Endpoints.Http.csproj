@@ -26,8 +26,17 @@
 
 	</ItemGroup>
 
-	<ItemGroup>
+
+	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+		<PackageReference Include="KetPsi.Endpoints.Abstractions" Version="$(Version)" />
+	</ItemGroup>
+	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
 		<ProjectReference Include="..\..\KetPsi.Endpoints.Abstractions\KetPsi.Endpoints.Abstractions.csproj" />
+	</ItemGroup>
+
+
+	<ItemGroup>
+		<None Include="..\KetPsi.Endpoints.Http.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Endpoints.Http.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs\KetPsi.Endpoints.Http.Generator.dll" Visible="false" />
 	</ItemGroup>
 
 </Project>
