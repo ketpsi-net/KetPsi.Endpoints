@@ -51,7 +51,6 @@ jobs:
         id: pack-abstraction
         uses: ./.github/workflows/actions/nuget-pack
         with:
-          solution_path: KetPsi.Endpoints.slnx 
           project_path: src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj
       - name: Push KetPsi.Endpoints.Abstractions
         env:
@@ -96,7 +95,7 @@ jobs:
         id: pack-http
         uses: ./.github/workflows/actions/nuget-pack
         with:
-          solution_path: KetPsi.Endpoints.slnx 
+          projects_to_build_path: src/http/KetPsi.Endpoints.Http.Generator/KetPsi.Endpoints.Http.Generator.csproj
           project_path: src/http/KetPsi.Endpoints.Http/KetPsi.Endpoints.Http.csproj
       - name: Push KetPsi.Endpoints.Http
         env:
