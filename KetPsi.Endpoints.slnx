@@ -1,0 +1,7 @@
+<Solution>
+
+  <Folder Name="/src/">
+    <Project Path="src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj" />
+  </Folder>
+
+</Solution>
