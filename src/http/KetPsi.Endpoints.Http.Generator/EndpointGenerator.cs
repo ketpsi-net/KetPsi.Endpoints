@@ -1132,7 +1132,7 @@ public partial class EndpointGenerator : IIncrementalGenerator
             var methodAccessibility = (handler.HandlerAccessibility == "internal" || param.ParameterAccessibility == "internal")
                 ? "internal"
                 : "public";
-            sb.AppendLine($"        {methodAccessibility} static HttpParameterBuilder<{param.TypeName}> {methodName}(this HttpEndpointBuilder<{handler.HandlerTypeName}> builder) => default!;");
+            sb.AppendLine($"        {methodAccessibility} static IHttpParameterBuilder<{param.TypeName}> {methodName}(this IHttpEndpointBuilder<{handler.HandlerTypeName}> builder) => default!;");
         }
 
         sb.AppendLine("    }");

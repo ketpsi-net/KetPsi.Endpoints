@@ -2,36 +2,31 @@
 
 namespace KetPsi.Endpoints.Http
 {
-    public interface IHttpEndpointConfiguration<TEndpoint>
+    public interface IHttpEndpointConfiguration<in TEndpoint>
     {
-        void Configure(HttpEndpointBuilder<TEndpoint> builder);
+        void Configure(IHttpEndpointBuilder<TEndpoint> builder);
     }
 
-    public sealed class HttpEndpointBuilder<TEndpoint>
+    public interface IHttpEndpointBuilder<out TEndpoint>
     {
-        private HttpEndpointBuilder() { }
     }
 
-    public sealed class HttpParameterBuilder<TParam>
+    public interface IHttpParameterBuilder<TParam>
     {
-        private HttpParameterBuilder() { }
-
-        public HttpParameterBuilder<TParam> FromRoute(string? name = null) => this;
-        public HttpParameterBuilder<TParam> FromQuery(string? name = null) => this;
-        public HttpParameterBuilder<TParam> FromHeader(string? name = null) => this;
-        public HttpParameterBuilder<TParam> FromBody() => this;
-        public HttpParameterBuilder<TParam> FromForm(string? name = null) => this;
-        public HttpParameterBuilder<TParam> FromServices() => this;
-        public HttpParameterBuilder<TParam> FromKeyedServices(object key) => this;
-        public HttpAsParametersBuilder<TParam> AsParameters() => default!;
+        public IHttpParameterBuilder<TParam> FromRoute(string? name = null) => this;
+        public IHttpParameterBuilder<TParam> FromQuery(string? name = null) => this;
+        public IHttpParameterBuilder<TParam> FromHeader(string? name = null) => this;
+        public IHttpParameterBuilder<TParam> FromBody() => this;
+        public IHttpParameterBuilder<TParam> FromForm(string? name = null) => this;
+        public IHttpParameterBuilder<TParam> FromServices() => this;
+        public IHttpParameterBuilder<TParam> FromKeyedServices(object key) => this;
+        public IHttpAsParametersBuilder<TParam> AsParameters() => default!;
     }
 
-    public sealed class HttpAsParametersBuilder<TParam>
+    public interface IHttpAsParametersBuilder<TParam>
     {
-        private HttpAsParametersBuilder() { }
-
-        public HttpAsParametersBuilder<TParam> Property<TProp>(
+        public IHttpAsParametersBuilder<TParam> Property<TProp>(
             Expression<Func<TParam, TProp>> propertySelector,
-            Action<HttpParameterBuilder<TProp>> configure) => this;
+            Action<IHttpParameterBuilder<TProp>> configure) => this;
     }
 }
