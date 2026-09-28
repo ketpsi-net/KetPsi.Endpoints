@@ -10,7 +10,7 @@ namespace HttpEndpointGenerator.Tests.Configurations;
 // -------------------------------------------------------
 public class GetOrdersWithRecordFilterConfig : IHttpEndpointConfiguration<GetOrdersWithRecordFilterHandler>
 {
-    public void Configure(HttpEndpointBuilder<GetOrdersWithRecordFilterHandler> builder)
+    public void Configure(IHttpEndpointBuilder<GetOrdersWithRecordFilterHandler> builder)
     {
         builder.Filter()
                .AsParameters()
@@ -27,7 +27,7 @@ public class GetOrdersWithRecordFilterConfig : IHttpEndpointConfiguration<GetOrd
 // -------------------------------------------------------
 public class SearchProductsConfig : IHttpEndpointConfiguration<SearchProductsHandler>
 {
-    public void Configure(HttpEndpointBuilder<SearchProductsHandler> builder)
+    public void Configure(IHttpEndpointBuilder<SearchProductsHandler> builder)
     {
         builder.Criteria()
                .AsParameters()
@@ -43,7 +43,7 @@ public class SearchProductsConfig : IHttpEndpointConfiguration<SearchProductsHan
 // -------------------------------------------------------
 public class ListCustomersConfig : IHttpEndpointConfiguration<ListCustomersHandler>
 {
-    public void Configure(HttpEndpointBuilder<ListCustomersHandler> builder)
+    public void Configure(IHttpEndpointBuilder<ListCustomersHandler> builder)
     {
         builder.Paging()
                .AsParameters()
@@ -59,7 +59,7 @@ public class ListCustomersConfig : IHttpEndpointConfiguration<ListCustomersHandl
 // -------------------------------------------------------
 public class GetSalesReportConfig : IHttpEndpointConfiguration<GetSalesReportHandler>
 {
-    public void Configure(HttpEndpointBuilder<GetSalesReportHandler> builder)
+    public void Configure(IHttpEndpointBuilder<GetSalesReportHandler> builder)
     {
         builder.Range()
                .AsParameters()
@@ -75,7 +75,7 @@ public class GetSalesReportConfig : IHttpEndpointConfiguration<GetSalesReportHan
 // -------------------------------------------------------
 public class SearchCustomersComplexConfig : IHttpEndpointConfiguration<SearchCustomersComplexHandler>
 {
-    public void Configure(HttpEndpointBuilder<SearchCustomersComplexHandler> builder)
+    public void Configure(IHttpEndpointBuilder<SearchCustomersComplexHandler> builder)
     {
         builder.Filter()
                .AsParameters()
@@ -92,7 +92,7 @@ public class SearchCustomersComplexConfig : IHttpEndpointConfiguration<SearchCus
 // -------------------------------------------------------
 public class GetInventoryConfig : IHttpEndpointConfiguration<GetInventoryHandler>
 {
-    public void Configure(HttpEndpointBuilder<GetInventoryHandler> builder)
+    public void Configure(IHttpEndpointBuilder<GetInventoryHandler> builder)
     {
         builder.Query()
                .AsParameters()
@@ -108,7 +108,7 @@ public class GetInventoryConfig : IHttpEndpointConfiguration<GetInventoryHandler
 // -------------------------------------------------------
 public class SearchByTermConfig : IHttpEndpointConfiguration<SearchByTermHandler>
 {
-    public void Configure(HttpEndpointBuilder<SearchByTermHandler> builder)
+    public void Configure(IHttpEndpointBuilder<SearchByTermHandler> builder)
     {
         builder.Filter()
                .AsParameters()
@@ -118,7 +118,7 @@ public class SearchByTermConfig : IHttpEndpointConfiguration<SearchByTermHandler
 
 public class SearchInitOnlyConfig : IHttpEndpointConfiguration<SearchInitOnlyHandler>
 {
-    public void Configure(HttpEndpointBuilder<SearchInitOnlyHandler> builder)
+    public void Configure(IHttpEndpointBuilder<SearchInitOnlyHandler> builder)
     {
         builder.Criteria()
                .AsParameters()
@@ -129,7 +129,7 @@ public class SearchInitOnlyConfig : IHttpEndpointConfiguration<SearchInitOnlyHan
 
 public class LookupByCodeConfig : IHttpEndpointConfiguration<LookupByCodeHandler>
 {
-    public void Configure(HttpEndpointBuilder<LookupByCodeHandler> builder)
+    public void Configure(IHttpEndpointBuilder<LookupByCodeHandler> builder)
     {
         builder.Filter()
                .AsParameters()
@@ -140,7 +140,7 @@ public class LookupByCodeConfig : IHttpEndpointConfiguration<LookupByCodeHandler
 
 public class EmptyishConfig : IHttpEndpointConfiguration<EmptyishHandler>
 {
-    public void Configure(HttpEndpointBuilder<EmptyishHandler> builder)
+    public void Configure(IHttpEndpointBuilder<EmptyishHandler> builder)
     {
         builder.Filter()
                .AsParameters()
@@ -151,7 +151,7 @@ public class EmptyishConfig : IHttpEndpointConfiguration<EmptyishHandler>
 
 public class CollisionConfig : IHttpEndpointConfiguration<CollisionHandler>
 {
-    public void Configure(HttpEndpointBuilder<CollisionHandler> builder)
+    public void Configure(IHttpEndpointBuilder<CollisionHandler> builder)
     {
         // External config + inline [FromQuery] on the parameter → collision case
         builder.Filter()
