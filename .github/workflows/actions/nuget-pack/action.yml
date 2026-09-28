@@ -1,0 +1,51 @@
+name: Pack NuGet
+description: 'A GitHub Action to pack a .NET project into a NuGet package.'
+
+inputs:
+  project_path:
+    required: true
+    description: 'Path to the .NET project file to pack.'
+    type: string
+  projects_to_build_path:
+    required: false
+    description: 'Comma-separated list of .NET project paths to build.'
+    type: string
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.x'
+
+    - name: Pack project
+      id: pack
+      run: |
+        IFS=',' read -ra PROJECTS <<< "${{ inputs.projects_to_build_path }}"
+        for proj in "${PROJECTS[@]}"; do
+          proj=$(echo "$proj" | xargs)
+          if [ -n "$proj" ]; then
+            echo "Building $proj..."
+            dotnet build "$proj" -c Release
+          fi
+        done
+
+        dotnet pack "${{ inputs.project_path }}" -c Release --output pack
+        PACKAGE_NAME=$(basename "${{ inputs.project_path }}" .csproj)
+        PACKAGE_PATH="pack/${PACKAGE_NAME}.${{ github.ref_name }}.nupkg"
+        echo "package_path=${PACKAGE_PATH}" >> "$GITHUB_OUTPUT"
+      shell: bash
+      env:
+        PACKAGE_VERSION: ${{ github.ref_name }}
+
+    - name: Upload pack artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: pack/*.nupkg
+        retention-days: 5
+        overwrite: true
