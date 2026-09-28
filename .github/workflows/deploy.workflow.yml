@@ -51,7 +51,6 @@ jobs:
         id: pack-abstraction
         uses: ./.github/workflows/actions/nuget-pack
         with:
-          solution_path: KetPsi.Endpoints.slnx 
           project_path: src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj
       - name: Push KetPsi.Endpoints.Abstractions
         env:
@@ -76,7 +75,7 @@ jobs:
         run: |
           for i in {1..20}; do
             dotnet nuget locals all --clear
-            if dotnet package search "$PACKAGE_NAME" --exact-match | grep "$PACKAGE_VERSION"; then
+            if dotnet package search "$PACKAGE_NAME" --exact-match --prerelease | grep "$PACKAGE_VERSION"; then
               echo "Package is available on NuGet!"
               exit 0
             fi
@@ -96,7 +95,7 @@ jobs:
         id: pack-http
         uses: ./.github/workflows/actions/nuget-pack
         with:
-          solution_path: KetPsi.Endpoints.slnx 
+          projects_to_build_path: src/http/KetPsi.Endpoints.Http.Generator/KetPsi.Endpoints.Http.Generator.csproj
           project_path: src/http/KetPsi.Endpoints.Http/KetPsi.Endpoints.Http.csproj
       - name: Push KetPsi.Endpoints.Http
         env:

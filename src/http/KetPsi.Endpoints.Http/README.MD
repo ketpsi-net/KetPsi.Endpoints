@@ -92,6 +92,9 @@ public Task<IResult> ExecuteAsync(
     CancellationToken ct);
 ```
 
+> [!TIP]
+> ✅ It is better practice to inject the services directly to the class not to the `ExecuteAsync` method
+
 ### Path parameters
 
 Route template `{id}` binds to a parameter named `id` (or use `[FromRoute]`).
@@ -411,7 +414,7 @@ Flatten properties into one type. Nested complex binding is not reliable for que
 
 ## License / package
 
-*(Add your license and package IDs here.)*
+MIT License
 
 ---
 
