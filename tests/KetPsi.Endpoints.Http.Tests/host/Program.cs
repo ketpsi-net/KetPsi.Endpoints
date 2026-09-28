@@ -3,7 +3,9 @@ using HttpEndpointGenerator.Tests.Handlers;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 
-var builder = WebApplication.CreateBuilder(args);
+var arguments = args.Where(x => !x.StartsWith("--contentRoot")).ToList();
+arguments.Add($"--contentRoot={AppContext.BaseDirectory}");
+ var builder = WebApplication.CreateBuilder(arguments.ToArray());
 
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddKeyedScoped<IBlobStorage, PrimaryBlobStorage>("primary");
@@ -21,6 +23,5 @@ app.UseHttpsRedirection();
 
 app.MapHttpEndpoints();
 
-app.Run();
+await app.RunAsync();
 
-public partial class Program { }
