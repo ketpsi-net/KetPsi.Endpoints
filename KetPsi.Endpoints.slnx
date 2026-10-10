@@ -11,6 +11,9 @@
   <Folder Name="/.github/workflows/actions/nuget-push/">
     <File Path=".github/workflows/actions/nuget-push/action.yml" />
   </Folder>
+  <Folder Name="/.github/workflows/actions/nuget-wait/">
+    <File Path=".github/workflows/actions/nuget-wait/action.yml" />
+  </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".gitignore" />
     <File Path="icon.png" />
