@@ -3,7 +3,7 @@ name: Tests
 on:
   pull_request:
     branches:
-      - develop
+      - dev
       - main
       - release/**
 
@@ -17,8 +17,8 @@ jobs:
         id: check-branches
         run: |
           if [[ ($GITHUB_BASE_REF == "main" && ! $GITHUB_HEAD_REF =~ release/*) ||
-               ($GITHUB_BASE_REF == "develop" && $GITHUB_HEAD_REF != "main" && ! $GITHUB_HEAD_REF =~ release/*) ||
-               ($GITHUB_BASE_REF =~ release/* && $GITHUB_HEAD_REF != "main" && $GITHUB_HEAD_REF != "develop") ]]; then
+               ($GITHUB_BASE_REF == "dev" && $GITHUB_HEAD_REF != "main" && ! $GITHUB_HEAD_REF =~ release/*) ||
+               ($GITHUB_BASE_REF =~ release/* && $GITHUB_HEAD_REF != "main" && $GITHUB_HEAD_REF != "dev") ]]; then
              echo "should_run_test=true" >> $GITHUB_OUTPUT
           else 
              echo "should_run_test=false" >> $GITHUB_OUTPUT
