@@ -51,7 +51,7 @@ jobs:
         id: pack-abstraction
         uses: ./.github/workflows/actions/nuget-pack
         with:
-          project_path: src/http/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj
+          project_path: src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj
       - name: Push KetPsi.Endpoints.Abstractions
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
@@ -83,7 +83,7 @@ jobs:
         id: pack-abstraction
         uses: ./.github/workflows/actions/nuget-pack
         with:
-          project_path: src/KetPsi.Endpoints.Http.Abstractions/KetPsi.Endpoints.Http.Abstractions.csproj
+          project_path: src/http/KetPsi.Endpoints.Http.Abstractions/KetPsi.Endpoints.Http.Abstractions.csproj
       - name: Push KetPsi.Endpoints.Http.Abstractions
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
