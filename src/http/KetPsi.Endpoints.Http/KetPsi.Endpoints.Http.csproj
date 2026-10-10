@@ -29,9 +29,11 @@
 
 	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
 		<PackageReference Include="KetPsi.Endpoints.Abstractions" Version="$(Version)" />
+		<PackageReference Include="KetPsi.Endpoints.Http.Abstractions" Version="$(Version)" />
 	</ItemGroup>
 	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
 		<ProjectReference Include="..\..\KetPsi.Endpoints.Abstractions\KetPsi.Endpoints.Abstractions.csproj" />
+		<ProjectReference Include="..\KetPsi.Endpoints.Http.Abstractions\KetPsi.Endpoints.Http.Abstractions.csproj" />
 	</ItemGroup>
 
 

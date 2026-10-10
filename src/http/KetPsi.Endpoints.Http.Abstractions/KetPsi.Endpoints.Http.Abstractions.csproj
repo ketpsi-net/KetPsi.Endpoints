@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="../../../version.props"></Import>
+
+	<PropertyGroup>
+		<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<PackageTags>minimal-apis;aspnetcore;source-generator;endpoints;handlers;asparameters;roslyn;http;rest;ketpsi</PackageTags>
+		<Description>Abstraction for the HTTP endpoint configuration in ASP.NET Core Minimal APIs.</Description>
+	</PropertyGroup>
+
+</Project>
