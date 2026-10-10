@@ -1,0 +1,61 @@
+name: 'Wait for NuGet Package'
+description: 'Wait until a NuGet package version becomes available.'
+
+inputs:
+  package_name:
+    required: true
+    description: 'Name of the NuGet package.'
+    type: string
+
+  package_version:
+    required: true
+    description: 'Version of the NuGet package.'
+    type: string
+
+  attempts:
+    required: false
+    description: 'Maximum number of attempts.'
+    default: '20'
+
+  interval_seconds:
+    required: false
+    description: 'Seconds to wait between attempts.'
+    default: '30'
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for package availability
+      shell: bash
+      env:
+        PACKAGE_NAME: ${{ inputs.package_name }}
+        PACKAGE_VERSION: ${{ inputs.package_version }}
+        ATTEMPTS: ${{ inputs.attempts }}
+        INTERVAL_SECONDS: ${{ inputs.interval_seconds }}
+      run: |
+        set -euo pipefail
+
+        # The NuGet Flat Container API requires lowercase identifiers
+        PKG_LOWER=$(echo "$PACKAGE_NAME" | tr '[:upper:]' '[:lower:]')
+        VER_LOWER=$(echo "$PACKAGE_VERSION" | tr '[:upper:]' '[:lower:]')
+
+        # Requesting the .nuspec file directly is the fastest, most reliable way to verify availability
+        URL="https://api.nuget.org/v3-flatcontainer/${PKG_LOWER}/${VER_LOWER}/${PKG_LOWER}.nuspec"
+        
+        for ((i = 1; i <= ATTEMPTS; i++)); do
+          echo "Checking $PACKAGE_NAME version $PACKAGE_VERSION ($i/$ATTEMPTS)..."
+        
+          # -s hides progress, -f fails silently on HTTP errors (like 404), -I fetches only headers
+          if curl -s -f -I "$URL" > /dev/null; then
+            echo "Package is available on NuGet!"
+            exit 0
+          fi
+        
+          if (( i < ATTEMPTS )); then
+            echo "Package is not available yet. Retrying in ${INTERVAL_SECONDS}s..."
+            sleep "$INTERVAL_SECONDS"
+          fi
+        done
+        
+        echo "Error: Package $PACKAGE_NAME version $PACKAGE_VERSION did not become available in time." >&2
+        exit 1
