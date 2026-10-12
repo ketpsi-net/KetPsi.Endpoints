@@ -36,13 +36,23 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.x'
-      - name: Run tests
-        run: dotnet test tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura --logger:"junit;LogFilePath=test-result.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
+
+      - name: Run Http tests
+        run: dotnet test tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj --collect:"XPlat Code Coverage" --results-directory ./TestResults/Http --logger:"junit;LogFilePath=test-result-http.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
+
+      - name: Run Results tests
+        run: dotnet test tests/KetPsi.Endpoints.Results.Tests/KetPsi.Endpoints.Results.Tests.csproj --collect:"XPlat Code Coverage" --results-directory ./TestResults/Results --logger:"junit;LogFilePath=test-result-results.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
+
+      - name: Merge code coverage reports
+        run: |
+          dotnet tool install -g dotnet-reportgenerator-globaltool
+          export PATH="$PATH:/home/runner/.dotnet/tools"
+          reportgenerator -reports:"./TestResults/**/*.cobertura.xml" -targetdir:"./CoverageReport" -reporttypes:"Cobertura"
 
       - name: Archive code coverage results
         uses: 5monkeys/cobertura-action@master
         with:
-          path: tests/KetPsi.Endpoints.Http.Tests/coverage.cobertura.xml
+          path: CoverageReport/Cobertura.xml
           name: code-coverage-report
           minimum_coverage: 45
 
@@ -50,4 +60,4 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         with:
           name: test-report
-          path: tests/KetPsi.Endpoints.Http.Tests/test-result.xml
+          path: './TestResults/**/test-result-*.xml'

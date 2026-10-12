@@ -22,6 +22,7 @@
     <File Path="version.props" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/KetPsi.Endpoints.Results/KetPsi.Endpoints.Results.csproj" Id="9982a3f5-714b-4ac8-b30d-6d42aa16e28d" />
     <Project Path="src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj" />
   </Folder>
   <Folder Name="/src/http/">
@@ -31,5 +32,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj" Id="48a3f91d-ac06-4bb1-ae5f-19da252638e7" />
+    <Project Path="tests/KetPsi.Endpoints.Results.Tests/KetPsi.Endpoints.Results.Tests.csproj" />
   </Folder>
 </Solution>
