@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<Import Project="../../version.props"></Import>
+
+	<PropertyGroup>
+		<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<PackageTags>endpoints;handlers;abstractions;minimal-apis;source-generators;aspnetcore;ketpsi</PackageTags>
+		<Description>result objects for KetPsi endpoint handlers</Description>
+	</PropertyGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="KetPsi.Results" Version="1.0.0" />
+	</ItemGroup>
+
+</Project>

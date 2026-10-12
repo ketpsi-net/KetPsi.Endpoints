@@ -1,27 +1,27 @@
 <Project>
-    <PropertyGroup>
-        <Title>$(AssemblyName)</Title>
-        <Version>1.1.0</Version>
+	<PropertyGroup>
+		<Title>$(AssemblyName)</Title>
+		<Version>1.1.0</Version>
 		<Authors>KetPsi ,MohamadArsalan Imamverdi</Authors>
 		<PackageId>$(AssemblyName)</PackageId>
-        <PackageProjectUrl>https://github.com/ketpsi-net/KetPsi.Endpoints</PackageProjectUrl>
-        <PackageReadmeFile>README.MD</PackageReadmeFile>
-        <RepositoryUrl>https://github.com/ketpsi-net/KetPsi.Endpoints</RepositoryUrl>
-        <PackageIcon>icon.png</PackageIcon>
-        <Icon>icon.png</Icon>
+		<PackageProjectUrl>https://github.com/ketpsi-net/KetPsi.Endpoints</PackageProjectUrl>
+		<PackageReadmeFile>README.MD</PackageReadmeFile>
+		<RepositoryUrl>https://github.com/ketpsi-net/KetPsi.Endpoints</RepositoryUrl>
+		<PackageIcon>icon.png</PackageIcon>
+		<Icon>icon.png</Icon>
 		<Copyright>Copyright © 2027</Copyright>
 		<PackageLicenseFile>LICENSE</PackageLicenseFile>
-    </PropertyGroup>
-    <ItemGroup>
-         <None Include="README.MD">
-            <Pack>True</Pack>
-            <PackagePath>\</PackagePath>
-        </None>
-        
-       
-    </ItemGroup>
+	</PropertyGroup>
+	<ItemGroup>
+		<None Include="README.MD">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
 
-	<ItemGroup  Condition=" '$(AssemblyName)' != 'KetPsi.Endpoints.Abstractions'">
+
+	</ItemGroup>
+
+	<ItemGroup  Condition=" '$(AssemblyName)' != 'KetPsi.Endpoints.Abstractions' and '$(AssemblyName)' != 'KetPsi.Endpoints.Results'">
 		<None Include="..\..\..\icon.png">
 			<Pack>True</Pack>
 			<PackagePath>\</PackagePath>
@@ -31,7 +31,7 @@
 			<PackagePath>\</PackagePath>
 		</None>
 	</ItemGroup>
-	<ItemGroup  Condition=" '$(AssemblyName)' == 'KetPsi.Endpoints.Abstractions'">
+	<ItemGroup  Condition=" '$(AssemblyName)' == 'KetPsi.Endpoints.Abstractions' or '$(AssemblyName)' == 'KetPsi.Endpoints.Results' ">
 		<None Include="..\..\icon.png">
 			<Pack>True</Pack>
 			<PackagePath>\</PackagePath>
