@@ -39,7 +39,8 @@ jobs:
 
       - name: Run Http tests
         run: dotnet test tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj --collect:"XPlat Code Coverage" --results-directory ./TestResults/Http --logger:"junit;LogFilePath=test-result-http.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
-
+      - name: Run Grpc tests
+        run: dotnet test tests/KetPsi.Endpoints.Grpc.Tests/KetPsi.Endpoints.Grpc.Tests.csproj --collect:"XPlat Code Coverage" --results-directory ./TestResults/Grpc --logger:"junit;LogFilePath=test-result-grpc.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
       - name: Run Results tests
         run: dotnet test tests/KetPsi.Endpoints.Results.Tests/KetPsi.Endpoints.Results.Tests.csproj --collect:"XPlat Code Coverage" --results-directory ./TestResults/Results --logger:"junit;LogFilePath=test-result-results.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
 

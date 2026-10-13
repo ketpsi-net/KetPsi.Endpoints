@@ -25,12 +25,18 @@
     <Project Path="src/KetPsi.Endpoints.Results/KetPsi.Endpoints.Results.csproj" Id="9982a3f5-714b-4ac8-b30d-6d42aa16e28d" />
     <Project Path="src/KetPsi.Endpoints.Abstractions/KetPsi.Endpoints.Abstractions.csproj" />
   </Folder>
+  <Folder Name="/src/grpc/">
+    <Project Path="src/grpc/KetPsi.Endpoints.Grpc.Abstractions/KetPsi.Endpoints.Grpc.Abstractions.csproj" />
+    <Project Path="src/grpc/KetPsi.Endpoints.Grpc.Generator/KetPsi.Endpoints.Grpc.Generator.csproj" />
+    <Project Path="src/grpc/KetPsi.Endpoints.Grpc/KetPsi.Endpoints.Grpc.csproj" />
+  </Folder>
   <Folder Name="/src/http/">
     <Project Path="src/http/KetPsi.Endpoints.Http.Abstractions/KetPsi.Endpoints.Http.Abstractions.csproj" Id="b0513df8-a212-4a81-8461-7501adc6bac3" />
     <Project Path="src/http/KetPsi.Endpoints.Http.Generator/KetPsi.Endpoints.Http.Generator.csproj" />
     <Project Path="src/http/KetPsi.Endpoints.Http/KetPsi.Endpoints.Http.csproj" Id="0f084b85-f63c-4e8d-b3dc-dbc3ee20ec9f" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/KetPsi.Endpoints.Grpc.Tests/KetPsi.Endpoints.Grpc.Tests.csproj" />
     <Project Path="tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj" Id="48a3f91d-ac06-4bb1-ae5f-19da252638e7" />
     <Project Path="tests/KetPsi.Endpoints.Results.Tests/KetPsi.Endpoints.Results.Tests.csproj" />
   </Folder>

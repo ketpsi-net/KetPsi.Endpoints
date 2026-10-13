@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<Import Project="../../../version.props"></Import>
+
+	<PropertyGroup>
+		<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<Description>Code-first gRPC endpoints for KetPsi (compile-time codecs, no protobuf-net)</Description>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+	</PropertyGroup>
+
+	<ItemGroup>
+
+	</ItemGroup>
+
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" Version="10.0.0" />
+		<PackageReference Include="Grpc.AspNetCore.Server" Version="2.84.0" />
+		<PackageReference Include="Grpc.Net.Common" Version="2.84.0" />
+		<PackageReference Include="System.ServiceModel.Primitives" Version="10.0.652802" />
+	</ItemGroup>
+
+
+	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+		<PackageReference Include="KetPsi.Endpoints.Abstractions" Version="$(Version)" />
+		<PackageReference Include="KetPsi.Endpoints.Grpc.Abstractions" Version="$(Version)" />
+	</ItemGroup>
+	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+		<ProjectReference Include="..\..\KetPsi.Endpoints.Abstractions\KetPsi.Endpoints.Abstractions.csproj" />
+		<ProjectReference Include="..\KetPsi.Endpoints.Grpc.Abstractions\KetPsi.Endpoints.Grpc.Abstractions.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="..\KetPsi.Endpoints.Grpc.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Endpoints.Grpc.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs\KetPsi.Endpoints.Grpc.Generator.dll" Visible="false" Condition="Exists('..\KetPsi.Endpoints.Grpc.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Endpoints.Grpc.Generator.dll')" />
+	</ItemGroup>
+
+</Project>
