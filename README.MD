@@ -28,7 +28,7 @@ The same handler shape is the foundation for HTTP today and gRPC next.
 | Package | Status | Description |
 |---------|--------|-------------|
 | **[KetPsi.Endpoints.Http](./src/http/KetPsi.Endpoints.Http)** | Available | Source-generated Minimal APIs from handlers |
-| **KetPsi.Endpoints.Grpc** | Coming soon | Code-first gRPC from the same handlers (no `.proto` maintenance) |
+| **[KetPsi.Endpoints.Grpc](./src/grpc/KetPsi.Endpoints.Grpc)** | Available | Code-first gRPC from the same handlers (no `.proto` maintenance) |
 
 ---
 
@@ -49,9 +49,7 @@ See **[README.md](./src/http/KetPsi.Endpoints.Http)** for usage, binding rules, 
 
 ## gRPC
 
-**Coming soon.**
-
-Same handler-centric model, code-first contracts, no hand-maintained `.proto` files as the source of truth.
+See **[README.md](./src/grpc/KetPsi.Endpoints.Grpc)** Same handler-centric model, code-first contracts, no hand-maintained `.proto` files as the source of truth.
 
 ---
 

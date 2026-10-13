@@ -11,6 +11,7 @@
 		<Icon>icon.png</Icon>
 		<Copyright>Copyright © 2027</Copyright>
 		<PackageLicenseFile>LICENSE</PackageLicenseFile>
+		<IsAotCompatible>true</IsAotCompatible>
 	</PropertyGroup>
 	<ItemGroup>
 		<None Include="README.MD">
