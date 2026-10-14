@@ -35,7 +35,8 @@ internal enum FieldKind
     Decimal,
     Enum,
     Message,
-    Repeated
+    Repeated,
+    Map
 }
 
 internal sealed class ProtoFieldModel
@@ -52,6 +53,9 @@ internal sealed class ProtoFieldModel
     public FieldKind ElementKind { get; }
     /// <summary>True when the property is T[] (not List/IList).</summary>
     public bool IsArray { get; }
+    public string MapKeyProtoType { get; }
+    public string MapKeyClrHint { get; }
+    public FieldKind MapKeyKind { get; }
 
     public ProtoFieldModel(
         string name,
@@ -63,7 +67,10 @@ internal sealed class ProtoFieldModel
         string elementProtoType = "",
         string elementClrHint = "",
         FieldKind elementKind = FieldKind.Unknown,
-        bool isArray = false)
+        bool isArray = false,
+        string mapKeyProtoType = "",
+        string mapKeyClrHint = "",
+        FieldKind mapKeyKind = FieldKind.Unknown)
     {
         Name = name;
         Number = number;
@@ -75,6 +82,9 @@ internal sealed class ProtoFieldModel
         ElementClrHint = elementClrHint ?? "";
         ElementKind = elementKind;
         IsArray = isArray;
+        MapKeyProtoType = mapKeyProtoType ?? "";
+        MapKeyClrHint = mapKeyClrHint ?? "";
+        MapKeyKind = mapKeyKind;
     }
 }
 
