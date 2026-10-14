@@ -88,7 +88,20 @@ internal static class ProtoSchemaEmitter
                 config = c3;
         }
 
-        if (config is null || config.Fields.IsDefaultOrEmpty)
+        if (config is null)
+            return existing;
+
+        // Strip FromMetadata properties from the wire/schema field list
+        if (!config.MetadataBindings.IsDefaultOrEmpty)
+        {
+            var metaNames = new HashSet<string>(config.MetadataBindings.Select(m => m.Name), StringComparer.Ordinal);
+            if (!existing.IsDefaultOrEmpty)
+                existing = existing.Where(f => !metaNames.Contains(f.Name)).ToImmutableArray();
+            if (config.Fields.IsDefaultOrEmpty)
+                return existing;
+        }
+
+        if (config.Fields.IsDefaultOrEmpty)
             return existing;
 
         // Rebuild field list: keep proto type from existing props when names match
@@ -234,7 +247,11 @@ internal static class ProtoSchemaEmitter
             foreach (var field in msg.Value.OrderBy(f => f.Number))
             {
                 var protoType = ToSchemaProtoType(field);
-                sb.Append("   ").Append(protoType).Append(' ').Append(SanitizeProtoIdent(field.Name))
+                // proto3 optional matches presence tracking for nullable CLR value types (raw scalar wire)
+                var optional = field.IsNullable && field.Kind is FieldKind.Int32 or FieldKind.Int64 or FieldKind.UInt32
+                    or FieldKind.UInt64 or FieldKind.Bool or FieldKind.Float or FieldKind.Double or FieldKind.Enum
+                    ? "optional " : "";
+                sb.Append("   ").Append(optional).Append(protoType).Append(' ').Append(SanitizeProtoIdent(field.Name))
                     .Append(" = ").Append(field.Number).AppendLine(";");
             }
             sb.AppendLine("}");
@@ -269,22 +286,8 @@ internal static class ProtoSchemaEmitter
     /// </summary>
     private static string ToSchemaProtoType(ProtoFieldModel field)
     {
-        // Nullable value types → Well-Known wrappers (MS docs)
-        if (field.IsNullable && field.Kind is FieldKind.Int32 or FieldKind.Int64 or FieldKind.UInt32
-            or FieldKind.UInt64 or FieldKind.Bool or FieldKind.Float or FieldKind.Double)
-        {
-            return field.Kind switch
-            {
-                FieldKind.Int32 => "google.protobuf.Int32Value",
-                FieldKind.Int64 => "google.protobuf.Int64Value",
-                FieldKind.UInt32 => "google.protobuf.UInt32Value",
-                FieldKind.UInt64 => "google.protobuf.UInt64Value",
-                FieldKind.Bool => "google.protobuf.BoolValue",
-                FieldKind.Float => "google.protobuf.FloatValue",
-                FieldKind.Double => "google.protobuf.DoubleValue",
-                _ => field.ProtoType
-            };
-        }
+        // Nullable scalars use proto3 "optional" (same raw wire type as our codecs).
+        // Do NOT emit google.protobuf.*Value wrappers — those are length-delimited submessages.
 
         switch (field.Kind)
         {
@@ -378,46 +381,7 @@ internal static class ProtoSchemaEmitter
             return "_" + new string(chars);
         return new string(chars);
     }
-    /// <summary>
-    /// Types that must never become nested protobuf messages / codecs
-    /// (e.g. System.Type → Assembly, TypeAttributes, …).
-    /// </summary>
-    private static bool IsNonMessageBclType(ITypeSymbol type, string? fullDisplay = null)
-    {
-        var full = fullDisplay ?? type.ToDisplayString();
-        if (full.StartsWith("global::", StringComparison.Ordinal))
-            full = full.Substring("global::".Length);
 
-        // Well-known value-like mappings handled elsewhere
-        if (full is "System.Guid" or "System.TimeSpan" or "System.DateTimeOffset"
-            or "System.DateTime" or "System.Decimal" or "System.Object")
-            return true;
-
-        // Reflection / type-system graph (causes Read_Type with Assembly, TypeAttributes, …)
-        if (full is "System.Type" or "System.RuntimeType" or "System.Reflection.TypeInfo"
-            or "System.Reflection.Assembly" or "System.Reflection.Module"
-            or "System.Reflection.MemberInfo" or "System.Reflection.MethodInfo"
-            or "System.Reflection.PropertyInfo" or "System.Reflection.FieldInfo"
-            or "System.Reflection.ConstructorInfo" or "System.Reflection.ParameterInfo"
-            or "System.Reflection.EventInfo" or "System.Delegate" or "System.MulticastDelegate"
-            or "System.Enum" or "System.ValueType" or "System.Array")
-            return true;
-
-        if (full.StartsWith("System.Reflection.", StringComparison.Ordinal))
-            return true;
-        if (full.StartsWith("System.Runtime.Serialization.", StringComparison.Ordinal))
-            return true;
-        if (full.StartsWith("System.Linq.Expressions.", StringComparison.Ordinal))
-            return true;
-
-        // Abstract framework types are never DTOs
-        if (type.IsAbstract && type.SpecialType == SpecialType.None &&
-            (full.StartsWith("System.", StringComparison.Ordinal) ||
-             full.StartsWith("Microsoft.", StringComparison.Ordinal)))
-            return true;
-
-        return false;
-    }
     public static (System.Collections.Immutable.ImmutableArray<NestedMessageModel> Nested, System.Collections.Immutable.ImmutableArray<EnumDefinitionModel> Enums) CollectTypeGraph(
         ITypeSymbol? request, ITypeSymbol? response)
     {
@@ -700,6 +664,45 @@ internal static class ProtoSchemaEmitter
         if (clr.EndsWith("?", StringComparison.Ordinal))
             clr = clr.Substring(0, clr.Length - 1);
         return clr;
+    }
+
+
+    /// <summary>
+    /// Types that must never become nested protobuf messages / codecs
+    /// (e.g. System.Type → Assembly, TypeAttributes, …).
+    /// </summary>
+    private static bool IsNonMessageBclType(ITypeSymbol type, string? fullDisplay = null)
+    {
+        var full = fullDisplay ?? type.ToDisplayString();
+        if (full.StartsWith("global::", StringComparison.Ordinal))
+            full = full.Substring("global::".Length);
+
+        if (full is "System.Guid" or "System.TimeSpan" or "System.DateTimeOffset"
+            or "System.DateTime" or "System.Decimal" or "System.Object")
+            return true;
+
+        if (full is "System.Type" or "System.RuntimeType" or "System.Reflection.TypeInfo"
+            or "System.Reflection.Assembly" or "System.Reflection.Module"
+            or "System.Reflection.MemberInfo" or "System.Reflection.MethodInfo"
+            or "System.Reflection.PropertyInfo" or "System.Reflection.FieldInfo"
+            or "System.Reflection.ConstructorInfo" or "System.Reflection.ParameterInfo"
+            or "System.Reflection.EventInfo" or "System.Delegate" or "System.MulticastDelegate"
+            or "System.Enum" or "System.ValueType" or "System.Array")
+            return true;
+
+        if (full.StartsWith("System.Reflection.", StringComparison.Ordinal))
+            return true;
+        if (full.StartsWith("System.Runtime.Serialization.", StringComparison.Ordinal))
+            return true;
+        if (full.StartsWith("System.Linq.Expressions.", StringComparison.Ordinal))
+            return true;
+
+        if (type.IsAbstract && type.SpecialType == SpecialType.None &&
+            (full.StartsWith("System.", StringComparison.Ordinal) ||
+             full.StartsWith("Microsoft.", StringComparison.Ordinal)))
+            return true;
+
+        return false;
     }
 
     private static bool IsMap(ITypeSymbol type, out ITypeSymbol key, out ITypeSymbol value)

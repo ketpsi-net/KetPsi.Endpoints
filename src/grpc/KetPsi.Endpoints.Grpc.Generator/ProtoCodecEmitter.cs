@@ -62,27 +62,7 @@ internal static class ProtoCodecEmitter
 
         context.AddSource("GeneratedProtoCodecs.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
     }
-    
-    private static bool IsForbiddenCodecClrName(string clr)
-    {
-        if (string.IsNullOrEmpty(clr)) return true;
-        if (clr.StartsWith("global::", StringComparison.Ordinal))
-            clr = clr.Substring("global::".Length);
 
-        if (clr is "System.Type" or "System.Reflection.TypeInfo" or "System.Reflection.Assembly"
-            or "System.Reflection.Module" or "System.Reflection.MemberInfo"
-            or "System.Reflection.MethodInfo" or "System.Reflection.PropertyInfo"
-            or "System.Reflection.FieldInfo" or "System.Reflection.ConstructorInfo"
-            or "System.Reflection.ParameterInfo" or "System.Reflection.EventInfo"
-            or "System.Delegate" or "System.MulticastDelegate" or "System.Enum" or "System.ValueType"
-            or "System.Array" or "System.Object")
-            return true;
-
-        if (clr.StartsWith("System.Reflection.", StringComparison.Ordinal))
-            return true;
-
-        return false;
-    }
     private static void EmitMessageCodec(StringBuilder sb, MessageShape msg, Dictionary<string, MessageShape> byClr, Compilation compilation)
     {
         var typeName = msg.ClrTypeName;
@@ -148,9 +128,28 @@ internal static class ProtoCodecEmitter
         sb.AppendLine("        }");
         sb.AppendLine();
 
-        sb.AppendLine($"        public static readonly Marshaller<{typeName}> Marshaller_{safe} = Marshallers.Create(");
-        sb.AppendLine($"            (arg, ctx) => ctx.Complete(Serialize_{safe}(arg)),");
-        sb.AppendLine($"            ctx => Deserialize_{safe}(ctx.PayloadAsNewBuffer()));");
+        // Contextual marshaller: write into Kestrel buffer; read from ReadOnlySequence (single-segment fast path)
+        sb.AppendLine($"        public static readonly Marshaller<{typeName}> Marshaller_{safe} = new Marshaller<{typeName}>(");
+        sb.AppendLine("            static (arg, ctx) =>");
+        sb.AppendLine("            {");
+        sb.AppendLine($"                var w = new ProtoWireWriter(ctx.GetBufferWriter());");
+        sb.AppendLine($"                Write_{safe}(ref w, arg);");
+        sb.AppendLine("                ctx.Complete();");
+        sb.AppendLine("            },");
+        sb.AppendLine("            static ctx =>");
+        sb.AppendLine("            {");
+        sb.AppendLine("                var seq = ctx.PayloadAsReadOnlySequence();");
+        sb.AppendLine("                if (seq.IsSingleSegment)");
+        sb.AppendLine("                {");
+        sb.AppendLine("                    var reader = new ProtoWireReader(seq.FirstSpan);");
+        sb.AppendLine($"                    return Read_{safe}(ref reader);");
+        sb.AppendLine("                }");
+        sb.AppendLine("                // Multi-segment rare path");
+        sb.AppendLine("                var rented = new byte[seq.Length];");
+        sb.AppendLine("                seq.CopyTo(rented);");
+        sb.AppendLine("                var reader2 = new ProtoWireReader(rented);");
+        sb.AppendLine($"                return Read_{safe}(ref reader2);");
+        sb.AppendLine("            });");
         sb.AppendLine();
     }
 
@@ -556,18 +555,28 @@ internal static class ProtoCodecEmitter
 
         if (f.Kind == FieldKind.Repeated)
         {
+            var listTarget = f.IsArray ? AccName(f.Name) : access;
             if (f.IsArray)
-            {
-                var acc = AccName(f.Name);
-                sb.AppendLine($"                        {acc} ??= new global::System.Collections.Generic.List<{f.ElementClrHint}>();");
-                EmitReadOneInto(sb, f.ElementKind, f.ElementClrHint, f.ElementProtoType, access, byClr, listAdd: acc);
-            }
+                sb.AppendLine($"                        {listTarget} ??= new global::System.Collections.Generic.List<{f.ElementClrHint}>();");
             else
-            {
-                // List / IList / ICollection — use concrete List for accumulation when null
                 sb.AppendLine($"                        {access} ??= new global::System.Collections.Generic.List<{f.ElementClrHint}>();");
-                EmitReadOneInto(sb, f.ElementKind, f.ElementClrHint, f.ElementProtoType, access, byClr, listAdd: access);
+
+            var packable = f.ElementKind is FieldKind.Int32 or FieldKind.Int64 or FieldKind.UInt32
+                or FieldKind.UInt64 or FieldKind.Bool or FieldKind.Float or FieldKind.Double or FieldKind.Enum;
+            if (packable)
+            {
+                sb.AppendLine("                        if (wireType == ProtoWireType.LengthDelimited)");
+                sb.AppendLine("                        {");
+                sb.AppendLine("                            var __pend = reader.BeginPacked();");
+                sb.AppendLine("                            while (reader.Position < __pend)");
+                sb.AppendLine("                            {");
+                // one element without break
+                EmitReadOneIntoPacked(sb, f.ElementKind, f.ElementClrHint, listTarget);
+                sb.AppendLine("                            }");
+                sb.AppendLine("                            break;");
+                sb.AppendLine("                        }");
             }
+            EmitReadOneInto(sb, f.ElementKind, f.ElementClrHint, f.ElementProtoType, access, byClr, listAdd: listTarget);
             return;
         }
 
@@ -590,6 +599,40 @@ internal static class ProtoCodecEmitter
         }
 
         EmitReadOneInto(sb, f.Kind, f.ClrTypeHint, f.ProtoType, access, byClr, listAdd: null);
+    }
+
+
+    private static void EmitReadOneIntoPacked(StringBuilder sb, FieldKind kind, string clrHint, string listAdd)
+    {
+        switch (kind)
+        {
+            case FieldKind.Enum:
+                sb.AppendLine($"                                {listAdd}.Add(({clrHint})reader.ReadInt32());");
+                break;
+            case FieldKind.Int32:
+                sb.AppendLine($"                                {listAdd}.Add(reader.ReadInt32());");
+                break;
+            case FieldKind.Int64:
+                sb.AppendLine($"                                {listAdd}.Add(reader.ReadInt64());");
+                break;
+            case FieldKind.UInt32:
+                sb.AppendLine($"                                {listAdd}.Add(reader.ReadUInt32());");
+                break;
+            case FieldKind.UInt64:
+                sb.AppendLine($"                                {listAdd}.Add(reader.ReadUInt64());");
+                break;
+            case FieldKind.Bool:
+                sb.AppendLine($"                                {listAdd}.Add(reader.ReadBool());");
+                break;
+            case FieldKind.Float:
+                sb.AppendLine($"                                {listAdd}.Add(reader.ReadFloat());");
+                break;
+            case FieldKind.Double:
+                sb.AppendLine($"                                {listAdd}.Add(reader.ReadDouble());");
+                break;
+            default:
+                break;
+        }
     }
 
     private static void EmitReadOneInto(
@@ -853,6 +896,24 @@ internal static class ProtoCodecEmitter
         }
     }
 
+
+    private static bool IsForbiddenCodecClrName(string clr)
+    {
+        if (string.IsNullOrEmpty(clr)) return true;
+        if (clr.StartsWith("global::", StringComparison.Ordinal))
+            clr = clr.Substring("global::".Length);
+        if (clr is "System.Type" or "System.Reflection.TypeInfo" or "System.Reflection.Assembly"
+            or "System.Reflection.Module" or "System.Reflection.MemberInfo"
+            or "System.Reflection.MethodInfo" or "System.Reflection.PropertyInfo"
+            or "System.Reflection.FieldInfo" or "System.Reflection.ConstructorInfo"
+            or "System.Reflection.ParameterInfo" or "System.Reflection.EventInfo"
+            or "System.Delegate" or "System.MulticastDelegate" or "System.Enum" or "System.ValueType"
+            or "System.Array" or "System.Object")
+            return true;
+        if (clr.StartsWith("System.Reflection.", StringComparison.Ordinal))
+            return true;
+        return false;
+    }
 
     private static string LocalName(string propName) => "__p_" + propName;
 

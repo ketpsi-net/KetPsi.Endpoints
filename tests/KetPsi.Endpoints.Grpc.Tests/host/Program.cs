@@ -4,6 +4,7 @@ using KetPsi.Endpoints.Grpc.Tests.Fixtures;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 var arguments = args.Where(x => !x.StartsWith("--contentRoot")).ToList();
 arguments.Add($"--contentRoot={AppContext.BaseDirectory}");

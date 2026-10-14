@@ -25,7 +25,7 @@ dotnet add package KetPsi.Endpoints.Grpc.Abstractions
 ### 1. Handler
 
 ```csharp
-public class GetUserByIdHandler : IEndpoint
+public class GetUserByIdHandler
 {
     public Task<GetUserResponse> ExecuteAsync(GetUserRequest request, CancellationToken ct)
         => Task.FromResult(new GetUserResponse { Id = request.Id, Name = "Ada" });
@@ -140,3 +140,11 @@ KetPsi.Endpoints.Grpc                  ← runtime + generatorerator (this packa
 ```
 
 ---
+
+## Requirements
+
+- .NET 8 / 9 / 10
+- ASP.NET Core (shared framework)
+- protobuf-net + protobuf-net.Grpc.AspNetCore
+```
+
