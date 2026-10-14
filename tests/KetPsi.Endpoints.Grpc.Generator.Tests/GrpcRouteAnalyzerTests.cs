@@ -9,7 +9,7 @@ using Microsoft.CodeAnalysis.Text;
 
 using Xunit;
 
-namespace KetPsi.Endpoints.Grpc.Tests;
+namespace KetPsi.Endpoints.Grpc.Generator.Tests;
 
 public class GrpcRouteAnalyzerTests
 {

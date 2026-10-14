@@ -5,7 +5,7 @@ using KetPsi.Endpoints.Grpc.Wire;
 
 using Xunit;
 
-namespace KetPsi.Endpoints.Grpc.Codec.Tests;
+namespace KetPsi.Endpoints.Grpc.Tests;
 
 /// <summary>
 /// Low-level protobuf wire format: tags, varints, fixed, length-delimited, skip, errors.
@@ -227,40 +227,24 @@ public class ProtoWireReaderWriterTests
     [Fact]
     public void TruncatedVarint_Throws()
     {
-        var r = new ProtoWireReader(new byte[] { 0x80 });
-        try
+        // ProtoWireReader is a ref struct — must not capture it in a lambda
+        Assert.Throws<InvalidOperationException>(static () =>
         {
-            r.ReadVarint32();
-            Assert.Fail("Expected InvalidOperationException was not thrown.");
-        }
-        catch (InvalidOperationException)
-        {
-            Assert.True(true);
-        }
-        catch (Exception)
-        {
-            Assert.Fail("Expected InvalidOperationException, but a different exception was thrown.");
-        }
+            var r = new ProtoWireReader(new byte[] { 0x80 });
+            _ = r.ReadVarint32();
+        });
     }
 
     [Fact]
     public void TruncatedFixed32_Throws()
     {
-        var r = new ProtoWireReader(new byte[] { 0x01, 0x02 });
-
-        try
+        // fixed32 requires 4 bytes; 2 bytes must throw.
+        // Do not call ReadVarint32 — 0x01 is a complete varint.
+        Assert.Throws<InvalidOperationException>(static () =>
         {
-            r.ReadFixed32();
-            Assert.Fail("Expected InvalidOperationException was not thrown.");
-        }
-        catch (InvalidOperationException)
-        {
-            Assert.True(true);
-        }
-        catch (Exception)
-        {
-            Assert.Fail("Expected InvalidOperationException, but a different exception was thrown.");
-        }
+            var r = new ProtoWireReader(new byte[] { 0x01, 0x02 });
+            _ = r.ReadFixed32();
+        });
     }
 
     [Fact]

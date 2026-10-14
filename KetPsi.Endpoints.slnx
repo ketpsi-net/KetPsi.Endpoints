@@ -36,6 +36,7 @@
     <Project Path="src/http/KetPsi.Endpoints.Http/KetPsi.Endpoints.Http.csproj" Id="0f084b85-f63c-4e8d-b3dc-dbc3ee20ec9f" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/KetPsi.Endpoints.Grpc.Generator.Tests/KetPsi.Endpoints.Grpc.Generator.Tests.csproj" />
     <Project Path="tests/KetPsi.Endpoints.Grpc.Tests/KetPsi.Endpoints.Grpc.Tests.csproj" />
     <Project Path="tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj" Id="48a3f91d-ac06-4bb1-ae5f-19da252638e7" />
     <Project Path="tests/KetPsi.Endpoints.Results.Tests/KetPsi.Endpoints.Results.Tests.csproj" />

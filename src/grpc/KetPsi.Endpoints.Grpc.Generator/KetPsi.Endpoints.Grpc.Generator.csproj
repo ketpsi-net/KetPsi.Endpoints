@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <RootNamespace>KetPsi.Endpoints.Grpc.Generator</RootNamespace>
+    <AssemblyName>KetPsi.Endpoints.Grpc.Generator</AssemblyName>
     <IsRoslynComponent>true</IsRoslynComponent>
   </PropertyGroup>
 

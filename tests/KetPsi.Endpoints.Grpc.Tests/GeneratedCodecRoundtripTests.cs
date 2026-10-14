@@ -1,9 +1,9 @@
 using KetPsi.Endpoints.Grpc;
-using KetPsi.Endpoints.Grpc.Codec.Tests.Fixtures;
+using KetPsi.Endpoints.Grpc.Tests.Fixtures;
 
 using Xunit;
 
-namespace KetPsi.Endpoints.Grpc.Codec.Tests;
+namespace KetPsi.Endpoints.Grpc.Tests;
 
 /// <summary>
 /// Round-trip tests for generated message codecs (requires MapGrpc* so generator emits GeneratedProtoCodecs).
@@ -13,7 +13,7 @@ public class GeneratedCodecRoundtripTests
     static GeneratedCodecRoundtripTests()
     {
         // Force generator side-effects / type init if any
-        _ = typeof(HostBootstrap);
+        _ = typeof(AllScalarsHandler);
     }
 
     private static AllScalarsMessage CreateFullScalars() => new()
@@ -190,6 +190,10 @@ public class GeneratedCodecRoundtripTests
         Assert.Empty(copy.IntArray);
         Assert.NotNull(copy.IntList);
         Assert.Empty(copy.IntList);
+        Assert.NotNull(copy.Scores);
+        Assert.Empty(copy.Scores);
+        Assert.NotNull(copy.ItemsByKey);
+        Assert.Empty(copy.ItemsByKey);
     }
 
     [Fact]

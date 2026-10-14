@@ -1,7 +1,7 @@
 using System.Net;
 
 using KetPsi.Endpoints.Grpc;
-using KetPsi.Endpoints.Grpc.Codec.Tests.Fixtures;
+using KetPsi.Endpoints.Grpc.Tests.Fixtures;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
@@ -10,7 +10,7 @@ using Microsoft.Extensions.Hosting;
 
 using Xunit;
 
-namespace KetPsi.Endpoints.Grpc.Codec.Tests;
+namespace KetPsi.Endpoints.Grpc.Tests;
 
 /// <summary>
 /// Asserts /proto schema type resolution matches Microsoft gRPC protobuf mapping rules.

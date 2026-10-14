@@ -150,8 +150,11 @@ public class ProtoWireSerializationTests
     public void TruncatedVarint_Throws()
     {
         var data = new byte[] { 0x80 }; // incomplete varint
-        var reader = new ProtoWireReader(data);
-        //Assert.Throws<InvalidOperationException>(() => reader.ReadVarint32());
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            var reader = new ProtoWireReader(data);
+            _ = reader.ReadVarint32();
+        });
     }
 
     [Theory]

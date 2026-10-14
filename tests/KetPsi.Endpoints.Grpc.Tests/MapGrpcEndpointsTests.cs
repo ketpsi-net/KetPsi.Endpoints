@@ -1,9 +1,14 @@
+using Grpc.Core;
 using System.Net;
+using System.Net.Http;
 
 using Grpc.Net.Client;
 
 using KetPsi.Endpoints.Abstractions;
+using KetPsi.Endpoints.Grpc;
 using KetPsi.Endpoints.Grpc.Abstractions;
+using KetPsi.Endpoints.Abstractions;
+using KetPsi.Endpoints.Grpc;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -180,7 +185,6 @@ public sealed class MapGrpcEndpointsTests : IClassFixture<WebApplicationFactory<
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // DTOs + IProtoTypeConfiguration maps

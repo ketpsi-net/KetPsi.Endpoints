@@ -18,7 +18,8 @@ internal static class ProtoCodecEmitter
     public static void Emit(
         SourceProductionContext context,
         ImmutableArray<GrpcEndpointModel> endpoints,
-        ImmutableArray<TypeConfigModel> typeConfigs)
+        ImmutableArray<TypeConfigModel> typeConfigs,
+        Compilation compilation)
     {
         var enriched = ProtoSchemaEmitter.ApplyTypeConfigFields(endpoints, typeConfigs);
         var messages = CollectMessages(enriched);
@@ -54,18 +55,41 @@ internal static class ProtoCodecEmitter
         sb.AppendLine();
 
         foreach (var msg in messages.OrderBy(m => m.ClrTypeName, StringComparer.Ordinal))
-            EmitMessageCodec(sb, msg, byClr);
+            EmitMessageCodec(sb, msg, byClr, compilation);
 
         sb.AppendLine("    }");
         sb.AppendLine("}");
 
         context.AddSource("GeneratedProtoCodecs.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
     }
+    
+    private static bool IsForbiddenCodecClrName(string clr)
+    {
+        if (string.IsNullOrEmpty(clr)) return true;
+        if (clr.StartsWith("global::", StringComparison.Ordinal))
+            clr = clr.Substring("global::".Length);
 
-    private static void EmitMessageCodec(StringBuilder sb, MessageShape msg, Dictionary<string, MessageShape> byClr)
+        if (clr is "System.Type" or "System.Reflection.TypeInfo" or "System.Reflection.Assembly"
+            or "System.Reflection.Module" or "System.Reflection.MemberInfo"
+            or "System.Reflection.MethodInfo" or "System.Reflection.PropertyInfo"
+            or "System.Reflection.FieldInfo" or "System.Reflection.ConstructorInfo"
+            or "System.Reflection.ParameterInfo" or "System.Reflection.EventInfo"
+            or "System.Delegate" or "System.MulticastDelegate" or "System.Enum" or "System.ValueType"
+            or "System.Array" or "System.Object")
+            return true;
+
+        if (clr.StartsWith("System.Reflection.", StringComparison.Ordinal))
+            return true;
+
+        return false;
+    }
+    private static void EmitMessageCodec(StringBuilder sb, MessageShape msg, Dictionary<string, MessageShape> byClr, Compilation compilation)
     {
         var typeName = msg.ClrTypeName;
+        if (IsForbiddenCodecClrName(typeName))
+            return;
         var safe = Sanitize(msg.MessageName);
+        var plan = ConstructionAnalyzer.Analyze(compilation, typeName, msg.Fields);
 
         // Write
         sb.AppendLine($"        public static void Write_{safe}(ref ProtoWireWriter writer, {typeName} value)");
@@ -77,11 +101,11 @@ internal static class ProtoCodecEmitter
         sb.AppendLine("        }");
         sb.AppendLine();
 
-        // Read
+        // Read — locals first, then construct (ctor / object initializer / parameterless+set)
         sb.AppendLine($"        public static {typeName} Read_{safe}(ref ProtoWireReader reader)");
         sb.AppendLine("        {");
-        sb.AppendLine($"            var value = new {typeName}();");
-        // Accumulators for array (T[]) repeated fields — cannot use List.Add on T[]
+        foreach (var f in msg.Fields.OrderBy(x => x.Number))
+            EmitFieldLocal(sb, f);
         foreach (var f in msg.Fields.Where(x => x.Kind == FieldKind.Repeated && x.IsArray))
         {
             var acc = AccName(f.Name);
@@ -99,9 +123,10 @@ internal static class ProtoCodecEmitter
         foreach (var f in msg.Fields.Where(x => x.Kind == FieldKind.Repeated && x.IsArray))
         {
             var acc = AccName(f.Name);
-            sb.AppendLine($"            if ({acc} is not null) value.{f.Name} = {acc}.ToArray();");
+            var loc = LocalName(f.Name);
+            sb.AppendLine($"            if ({acc} is not null) {loc} = {acc}.ToArray();");
         }
-        sb.AppendLine("            return value;");
+        EmitConstruction(sb, typeName, msg.Fields, plan);
         sb.AppendLine("        }");
         sb.AppendLine();
 
@@ -136,6 +161,12 @@ internal static class ProtoCodecEmitter
         var proto = f.ProtoType.Trim();
         var kind = f.Kind;
 
+        if (kind == FieldKind.Map)
+        {
+            EmitWriteMapField(sb, f, access, byClr);
+            return;
+        }
+
         if (kind == FieldKind.Repeated)
         {
             sb.AppendLine($"            if ({access} is not null)");
@@ -151,9 +182,28 @@ internal static class ProtoCodecEmitter
         EmitWriteOne(sb, f.Number, proto, f.ClrTypeHint, kind, access, isNullable, byClr, "            ");
     }
 
+    private static void EmitWriteMapField(StringBuilder sb, ProtoFieldModel f, string access, Dictionary<string, MessageShape> byClr)
+    {
+        // map entries: repeated length-delimited messages with key=1, value=2
+        sb.AppendLine($"            if ({access} is not null)");
+        sb.AppendLine("            {");
+        sb.AppendLine($"                foreach (var __kv in {access})");
+        sb.AppendLine("                {");
+        sb.AppendLine("                    var __entryBuf = new ArrayBufferWriter<byte>(32);");
+        sb.AppendLine("                    var __ew = new ProtoWireWriter(__entryBuf);");
+        EmitWriteOne(sb, 1, f.MapKeyProtoType, f.MapKeyClrHint, f.MapKeyKind, "__kv.Key", false, byClr, "                    ", "__ew");
+        EmitWriteOne(sb, 2, f.ElementProtoType, f.ElementClrHint, f.ElementKind, "__kv.Value", false, byClr, "                    ", "__ew");
+        sb.AppendLine("                    __ew.Dispose();");
+        sb.AppendLine($"                    writer.WriteTag({f.Number}, ProtoWireType.LengthDelimited);");
+        sb.AppendLine("                    writer.WriteLengthDelimitedBytes(__entryBuf.WrittenSpan);");
+        sb.AppendLine("                }");
+        sb.AppendLine("            }");
+    }
+
     private static void EmitWriteOne(
         StringBuilder sb, int number, string proto, string clrHint, FieldKind kind,
-        string access, bool isNullable, Dictionary<string, MessageShape> byClr, string indent)
+        string access, bool isNullable, Dictionary<string, MessageShape> byClr, string indent,
+        string w = "writer")
     {
         void L(string s) => sb.Append(indent).AppendLine(s);
 
@@ -172,8 +222,8 @@ internal static class ProtoCodecEmitter
                 L($"    var __nw = new ProtoWireWriter(__buf);");
                 L($"    Write_{nestedSafe}(ref __nw, {access});");
                 L($"    __nw.Dispose();");
-                L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                 L("}");
             }
             else
@@ -183,8 +233,8 @@ internal static class ProtoCodecEmitter
                 L($"    var __nw = new ProtoWireWriter(__buf);");
                 L($"    Write_{nestedSafe}(ref __nw, {access});");
                 L($"    __nw.Dispose();");
-                L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                 L("}");
             }
             return;
@@ -197,44 +247,44 @@ internal static class ProtoCodecEmitter
                 {
                     L($"if ({access}.HasValue)");
                     L("{");
-                    L($"    writer.WriteTag({number}, ProtoWireType.Varint);");
-                    L($"    writer.WriteInt32((int){access}.Value);");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.Varint);");
+                    L($"    {w}.WriteInt32((int){access}.Value);");
                     L("}");
                 }
                 else
                 {
-                    L($"writer.WriteTag({number}, ProtoWireType.Varint);");
-                    L($"writer.WriteInt32((int){access});");
+                    L($"{w}.WriteTag({number}, ProtoWireType.Varint);");
+                    L($"{w}.WriteInt32((int){access});");
                 }
                 break;
             case FieldKind.Int32:
-                WriteVarintScalar(L, number, access, isNullable, "WriteInt32", cast: null);
+                WriteVarintScalar(L, number, access, isNullable, "WriteInt32", cast: null, w);
                 break;
             case FieldKind.Int64:
-                WriteVarintScalar(L, number, access, isNullable, "WriteInt64", cast: null);
+                WriteVarintScalar(L, number, access, isNullable, "WriteInt64", cast: null, w);
                 break;
             case FieldKind.UInt32:
-                WriteVarintScalar(L, number, access, isNullable, "WriteUInt32", cast: null);
+                WriteVarintScalar(L, number, access, isNullable, "WriteUInt32", cast: null, w);
                 break;
             case FieldKind.UInt64:
-                WriteVarintScalar(L, number, access, isNullable, "WriteUInt64", cast: null);
+                WriteVarintScalar(L, number, access, isNullable, "WriteUInt64", cast: null, w);
                 break;
             case FieldKind.Bool:
-                WriteVarintScalar(L, number, access, isNullable, "WriteBool", cast: null);
+                WriteVarintScalar(L, number, access, isNullable, "WriteBool", cast: null, w);
                 break;
             case FieldKind.Float:
                 if (isNullable)
                 {
                     L($"if ({access}.HasValue)");
                     L("{");
-                    L($"    writer.WriteTag({number}, ProtoWireType.Fixed32);");
-                    L($"    writer.WriteFloat({access}.Value);");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.Fixed32);");
+                    L($"    {w}.WriteFloat({access}.Value);");
                     L("}");
                 }
                 else
                 {
-                    L($"writer.WriteTag({number}, ProtoWireType.Fixed32);");
-                    L($"writer.WriteFloat({access});");
+                    L($"{w}.WriteTag({number}, ProtoWireType.Fixed32);");
+                    L($"{w}.WriteFloat({access});");
                 }
                 break;
             case FieldKind.Double:
@@ -242,14 +292,14 @@ internal static class ProtoCodecEmitter
                 {
                     L($"if ({access}.HasValue)");
                     L("{");
-                    L($"    writer.WriteTag({number}, ProtoWireType.Fixed64);");
-                    L($"    writer.WriteDouble({access}.Value);");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.Fixed64);");
+                    L($"    {w}.WriteDouble({access}.Value);");
                     L("}");
                 }
                 else
                 {
-                    L($"writer.WriteTag({number}, ProtoWireType.Fixed64);");
-                    L($"writer.WriteDouble({access});");
+                    L($"{w}.WriteTag({number}, ProtoWireType.Fixed64);");
+                    L($"{w}.WriteDouble({access});");
                 }
                 break;
             case FieldKind.String:
@@ -261,36 +311,36 @@ internal static class ProtoCodecEmitter
                     {
                         L($"if ({access}.HasValue)");
                         L("{");
-                        L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                        L($"    writer.WriteString({access}.Value.ToString());");
+                        L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                        L($"    {w}.WriteString({access}.Value.ToString());");
                         L("}");
                     }
                     else
                     {
-                        L($"writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                        L($"writer.WriteString({access}.ToString());");
+                        L($"{w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                        L($"{w}.WriteString({access}.ToString());");
                     }
                 }
                 else if (isNullable)
                 {
                     L($"if ({access} is not null)");
                     L("{");
-                    L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                    L($"    writer.WriteString({access});");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                    L($"    {w}.WriteString({access});");
                     L("}");
                 }
                 else
                 {
-                    L($"writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                    L($"writer.WriteString({access} ?? string.Empty);");
+                    L($"{w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                    L($"{w}.WriteString({access} ?? string.Empty);");
                 }
                 break;
             }
             case FieldKind.Bytes:
                 L($"if ({access} is not null)");
                 L("{");
-                L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                L($"    writer.WriteBytes({access});");
+                L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                L($"    {w}.WriteBytes({access});");
                 L("}");
                 break;
             case FieldKind.Guid:
@@ -299,14 +349,14 @@ internal static class ProtoCodecEmitter
                 {
                     L($"if ({access}.HasValue)");
                     L("{");
-                    L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                    L($"    writer.WriteBytes({access}.Value.ToByteArray());");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                    L($"    {w}.WriteBytes({access}.Value.ToByteArray());");
                     L("}");
                 }
                 else
                 {
-                    L($"writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                    L($"writer.WriteBytes({access}.ToByteArray());");
+                    L($"{w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                    L($"{w}.WriteBytes({access}.ToByteArray());");
                 }
                 break;
             case FieldKind.DateTime:
@@ -325,8 +375,8 @@ internal static class ProtoCodecEmitter
                         L($"    __nw.WriteTag(1, ProtoWireType.Varint); __nw.WriteInt64(__sec);");
                         L($"    if (__nano != 0) {{ __nw.WriteTag(2, ProtoWireType.Varint); __nw.WriteInt32(__nano); }}");
                         L($"    __nw.Dispose();");
-                        L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                        L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                        L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                        L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                         L("}");
                     }
                     else
@@ -340,8 +390,8 @@ internal static class ProtoCodecEmitter
                         L($"    __nw.WriteTag(1, ProtoWireType.Varint); __nw.WriteInt64(__sec);");
                         L($"    if (__nano != 0) {{ __nw.WriteTag(2, ProtoWireType.Varint); __nw.WriteInt32(__nano); }}");
                         L($"    __nw.Dispose();");
-                        L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                        L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                        L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                        L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                         L("}");
                     }
                 }
@@ -361,8 +411,8 @@ internal static class ProtoCodecEmitter
                         L($"    __nw.WriteTag(1, ProtoWireType.Varint); __nw.WriteInt64(__sec);");
                         L($"    if (__nano != 0) {{ __nw.WriteTag(2, ProtoWireType.Varint); __nw.WriteInt32(__nano); }}");
                         L($"    __nw.Dispose();");
-                        L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                        L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                        L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                        L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                         L("}");
                     }
                     else
@@ -377,8 +427,8 @@ internal static class ProtoCodecEmitter
                         L($"    __nw.WriteTag(1, ProtoWireType.Varint); __nw.WriteInt64(__sec);");
                         L($"    if (__nano != 0) {{ __nw.WriteTag(2, ProtoWireType.Varint); __nw.WriteInt32(__nano); }}");
                         L($"    __nw.Dispose();");
-                        L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                        L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                        L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                        L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                         L("}");
                     }
                 }
@@ -397,8 +447,8 @@ internal static class ProtoCodecEmitter
                     L($"    __nw.WriteTag(1, ProtoWireType.Varint); __nw.WriteInt64(__sec);");
                     L($"    if (__nano != 0) {{ __nw.WriteTag(2, ProtoWireType.Varint); __nw.WriteInt32(__nano); }}");
                     L($"    __nw.Dispose();");
-                    L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                    L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                    L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                     L("}");
                 }
                 else
@@ -412,8 +462,8 @@ internal static class ProtoCodecEmitter
                     L($"    __nw.WriteTag(1, ProtoWireType.Varint); __nw.WriteInt64(__sec);");
                     L($"    if (__nano != 0) {{ __nw.WriteTag(2, ProtoWireType.Varint); __nw.WriteInt32(__nano); }}");
                     L($"    __nw.Dispose();");
-                    L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                    L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                    L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                     L("}");
                 }
                 break;
@@ -431,8 +481,8 @@ internal static class ProtoCodecEmitter
                     L($"    __nw.WriteTag(1, ProtoWireType.Varint); __nw.WriteInt64(__units);");
                     L($"    if (__nanos != 0) {{ __nw.WriteTag(2, ProtoWireType.Fixed32); __nw.WriteFixed32(unchecked((uint)__nanos)); }}");
                     L($"    __nw.Dispose();");
-                    L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                    L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                    L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                     L("}");
                 }
                 else
@@ -446,8 +496,8 @@ internal static class ProtoCodecEmitter
                     L($"    __nw.WriteTag(1, ProtoWireType.Varint); __nw.WriteInt64(__units);");
                     L($"    if (__nanos != 0) {{ __nw.WriteTag(2, ProtoWireType.Fixed32); __nw.WriteFixed32(unchecked((uint)__nanos)); }}");
                     L($"    __nw.Dispose();");
-                    L($"    writer.WriteTag({number}, ProtoWireType.LengthDelimited);");
-                    L($"    writer.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
+                    L($"    {w}.WriteTag({number}, ProtoWireType.LengthDelimited);");
+                    L($"    {w}.WriteLengthDelimitedBytes(__buf.WrittenSpan);");
                     L("}");
                 }
                 break;
@@ -457,9 +507,8 @@ internal static class ProtoCodecEmitter
         }
     }
 
-    private static void WriteVarintScalar(Action<string> L, int number, string access, bool isNullable, string method, string? cast)
+    private static void WriteVarintScalar(Action<string> L, int number, string access, bool isNullable, string method, string? cast, string w = "writer")
     {
-        // Explicit cast so byte/sbyte/short/ushort/nint/nuint compile against WriteInt32/WriteUInt32/WriteInt64/WriteUInt64
         var arg = method switch
         {
             "WriteInt32" => $"(int)({access})",
@@ -483,21 +532,27 @@ internal static class ProtoCodecEmitter
         {
             L($"if ({access}.HasValue)");
             L("{");
-            L($"    writer.WriteTag({number}, ProtoWireType.Varint);");
-            L($"    writer.{method}({argN});");
+            L($"    {w}.WriteTag({number}, ProtoWireType.Varint);");
+            L($"    {w}.{method}({argN});");
             L("}");
         }
         else
         {
-            L($"writer.WriteTag({number}, ProtoWireType.Varint);");
-            L($"writer.{method}({arg});");
+            L($"{w}.WriteTag({number}, ProtoWireType.Varint);");
+            L($"{w}.{method}({arg});");
         }
     }
 
     private static void EmitReadCase(StringBuilder sb, ProtoFieldModel f, Dictionary<string, MessageShape> byClr)
     {
-        var access = "value." + f.Name;
+        var access = LocalName(f.Name);
         sb.AppendLine($"                    case {f.Number}:");
+
+        if (f.Kind == FieldKind.Map)
+        {
+            EmitReadMapCase(sb, f, access, byClr);
+            return;
+        }
 
         if (f.Kind == FieldKind.Repeated)
         {
@@ -704,6 +759,238 @@ internal static class ProtoCodecEmitter
                 break;
         }
     }
+
+
+    private static void EmitReadMapCase(StringBuilder sb, ProtoFieldModel f, string access, Dictionary<string, MessageShape> byClr)
+    {
+        var keyClr = string.IsNullOrEmpty(f.MapKeyClrHint) ? "string" : f.MapKeyClrHint;
+        var valClr = string.IsNullOrEmpty(f.ElementClrHint) ? "string" : f.ElementClrHint;
+        sb.AppendLine($"                        {access} ??= new global::System.Collections.Generic.Dictionary<{keyClr}, {valClr}>();");
+        sb.AppendLine("                    {");
+        sb.AppendLine("                        var __sub = reader.ReadBytes();");
+        sb.AppendLine("                        var __nr = new ProtoWireReader(__sub);");
+        sb.AppendLine($"                        {keyClr} __mapKey = default!;");
+        sb.AppendLine($"                        {valClr} __mapVal = default!;");
+        sb.AppendLine("                        while (__nr.TryReadTag(out var __mf, out var __mw))");
+        sb.AppendLine("                        {");
+        sb.AppendLine("                            if (__mf == 1)");
+        sb.AppendLine("                            {");
+        EmitReadScalarInto(sb, f.MapKeyKind, f.MapKeyClrHint, "__mapKey", "__nr", byClr, "                                ");
+        sb.AppendLine("                            }");
+        sb.AppendLine("                            else if (__mf == 2)");
+        sb.AppendLine("                            {");
+        EmitReadScalarInto(sb, f.ElementKind, f.ElementClrHint, "__mapVal", "__nr", byClr, "                                ");
+        sb.AppendLine("                            }");
+        sb.AppendLine("                            else __nr.SkipField(__mw);");
+        sb.AppendLine("                        }");
+        sb.AppendLine($"                        {access}[__mapKey] = __mapVal;");
+        sb.AppendLine("                    }");
+        sb.AppendLine("                        break;");
+    }
+
+    private static void EmitReadScalarInto(
+        StringBuilder sb, FieldKind kind, string clrHint, string target, string readerVar,
+        Dictionary<string, MessageShape> byClr, string indent)
+    {
+        void L(string s) => sb.Append(indent).AppendLine(s);
+        switch (kind)
+        {
+            case FieldKind.String:
+                if (IsCharClr(clrHint))
+                {
+                    L($"{{ var __cs = {readerVar}.ReadString(); {target} = string.IsNullOrEmpty(__cs) ? default : __cs[0]; }}");
+                }
+                else
+                    L($"{target} = {readerVar}.ReadString();");
+                break;
+            case FieldKind.Bool:
+                L($"{target} = {readerVar}.ReadBool();");
+                break;
+            case FieldKind.Int32:
+                L($"{target} = {CastToClr(clrHint, readerVar + ".ReadInt32()")};");
+                break;
+            case FieldKind.Int64:
+                L($"{target} = {CastToClr(clrHint, readerVar + ".ReadInt64()")};");
+                break;
+            case FieldKind.UInt32:
+                L($"{target} = {CastToClr(clrHint, readerVar + ".ReadUInt32()")};");
+                break;
+            case FieldKind.UInt64:
+                L($"{target} = {CastToClr(clrHint, readerVar + ".ReadUInt64()")};");
+                break;
+            case FieldKind.Float:
+                L($"{target} = {readerVar}.ReadFloat();");
+                break;
+            case FieldKind.Double:
+                L($"{target} = {readerVar}.ReadDouble();");
+                break;
+            case FieldKind.Enum:
+                L($"{target} = ({clrHint}){readerVar}.ReadInt32();");
+                break;
+            case FieldKind.Bytes:
+                L($"{target} = {readerVar}.ReadBytes().ToArray();");
+                break;
+            case FieldKind.Guid:
+                L($"{{ var __gb = {readerVar}.ReadBytes(); {target} = __gb.Length == 16 ? new Guid(__gb) : default; }}");
+                break;
+            case FieldKind.Message:
+            {
+                MessageShape? nested = null;
+                TryFindNested(byClr, clrHint, out nested);
+                if (nested is null)
+                    TryFindNested(byClr, SimpleTypeName(clrHint), out nested);
+                if (nested is not null)
+                {
+                    L($"{{ var __ms = {readerVar}.ReadBytes(); var __mr = new ProtoWireReader(__ms); {target} = Read_{Sanitize(nested.MessageName)}(ref __mr); }}");
+                }
+                else
+                    L($"{readerVar}.SkipField(ProtoWireType.LengthDelimited);");
+                break;
+            }
+            default:
+                L($"{readerVar}.SkipField(ProtoWireType.Varint);");
+                break;
+        }
+    }
+
+
+    private static string LocalName(string propName) => "__p_" + propName;
+
+    /// <summary>
+    /// Empty repeated/map fields were never present on the wire — emit empty collections instead of null.
+    /// </summary>
+    private static string CoalesceExpr(ProtoFieldModel f)
+    {
+        var loc = LocalName(f.Name);
+        if (f.Kind == FieldKind.Repeated)
+        {
+            if (f.IsArray)
+            {
+                var elem = string.IsNullOrEmpty(f.ElementClrHint) ? "object" : f.ElementClrHint;
+                return $"{loc} ?? System.Array.Empty<{elem}>()";
+            }
+            return $"{loc} ?? new global::System.Collections.Generic.List<{f.ElementClrHint}>()";
+        }
+        if (f.Kind == FieldKind.Map)
+        {
+            var k = string.IsNullOrEmpty(f.MapKeyClrHint) ? "string" : f.MapKeyClrHint;
+            var v = string.IsNullOrEmpty(f.ElementClrHint) ? "string" : f.ElementClrHint;
+            return $"{loc} ?? new global::System.Collections.Generic.Dictionary<{k}, {v}>()";
+        }
+        return loc;
+    }
+
+    private static void EmitFieldLocal(StringBuilder sb, ProtoFieldModel f)
+    {
+        var loc = LocalName(f.Name);
+        var ty = LocalClrType(f);
+        // reference types and nullables: default!; value types: default
+        if (NeedsDefaultBang(f, ty))
+            sb.AppendLine($"            {ty} {loc} = default!;");
+        else
+            sb.AppendLine($"            {ty} {loc} = default;");
+    }
+
+    private static string LocalClrType(ProtoFieldModel f)
+    {
+        if (f.Kind == FieldKind.Map)
+        {
+            var k = string.IsNullOrEmpty(f.MapKeyClrHint) ? "string" : f.MapKeyClrHint;
+            var v = string.IsNullOrEmpty(f.ElementClrHint) ? "string" : f.ElementClrHint;
+            return $"global::System.Collections.Generic.Dictionary<{k}, {v}>?";
+        }
+        if (f.Kind == FieldKind.Repeated)
+        {
+            if (f.IsArray)
+                return (string.IsNullOrEmpty(f.ElementClrHint) ? "object" : f.ElementClrHint) + "[]?";
+            return $"global::System.Collections.Generic.List<{f.ElementClrHint}>?";
+        }
+        if (!string.IsNullOrEmpty(f.ClrTypeHint))
+        {
+            var c = f.ClrTypeHint;
+            // Nullable value types + enums must keep '?' so all-null round-trips stay null
+            if (f.IsNullable && !c.EndsWith("?", StringComparison.Ordinal) &&
+                (IsValueTypeHint(c) || f.Kind == FieldKind.Enum || f.Kind == FieldKind.Guid
+                 || f.Kind == FieldKind.DateTime || f.Kind == FieldKind.TimeSpan || f.Kind == FieldKind.Decimal))
+                return c + "?";
+            return c;
+        }
+        return "object";
+    }
+
+    private static bool IsValueTypeHint(string clr)
+    {
+        switch (clr)
+        {
+            case "bool": case "byte": case "sbyte": case "short": case "ushort":
+            case "int": case "uint": case "long": case "ulong":
+            case "float": case "double": case "decimal": case "char":
+            case "System.Guid": case "Guid":
+            case "System.DateTime": case "DateTime":
+            case "System.DateTimeOffset": case "DateTimeOffset":
+            case "System.TimeSpan": case "TimeSpan":
+            case "nint": case "nuint": case "System.IntPtr": case "System.UIntPtr":
+                return true;
+            default:
+                // enums and other value types often unqualified names — treat non-namespace simple names carefully
+                return false;
+        }
+    }
+
+    private static bool NeedsDefaultBang(ProtoFieldModel f, string ty)
+        => ty.EndsWith("?", StringComparison.Ordinal)
+           || ty == "string"
+           || f.Kind is FieldKind.Message or FieldKind.Bytes or FieldKind.String
+           || (!IsValueTypeHint(f.ClrTypeHint) && f.Kind != FieldKind.Enum && f.Kind != FieldKind.Unknown);
+
+    private static void EmitConstruction(
+        StringBuilder sb,
+        string typeName,
+        System.Collections.Generic.IReadOnlyList<ProtoFieldModel> fields,
+        ConstructionPlan plan)
+    {
+        switch (plan.Kind)
+        {
+            case ConstructionKind.Constructor:
+            {
+                var args = new List<string>();
+                foreach (var n in plan.CtorParameterPropertyNames)
+                {
+                    if (n is "default" or "default!")
+                    {
+                        args.Add("default");
+                        continue;
+                    }
+                    var field = fields.FirstOrDefault(x => x.Name == n);
+                    args.Add(field is null ? LocalName(n) : CoalesceExpr(field));
+                }
+                sb.AppendLine($"            return new {typeName}({string.Join(", ", args)});");
+                break;
+            }
+            case ConstructionKind.ObjectInitializer:
+            {
+                sb.AppendLine($"            return new {typeName}");
+                sb.AppendLine("            {");
+                foreach (var f in fields.OrderBy(x => x.Number))
+                    sb.AppendLine($"                {f.Name} = {CoalesceExpr(f)},");
+                sb.AppendLine("            };");
+                break;
+            }
+            default: // ParameterlessThenSet
+            {
+                sb.AppendLine($"            var value = new {typeName}();");
+                foreach (var f in fields.OrderBy(x => x.Number))
+                {
+                    if (plan.SettableProperties.Count > 0 && !plan.SettableProperties.Contains(f.Name))
+                        continue;
+                    sb.AppendLine($"            value.{f.Name} = {CoalesceExpr(f)};");
+                }
+                sb.AppendLine("            return value;");
+                break;
+            }
+        }
+    }
+
 
     private static string AccName(string propName)
         => "__acc_" + propName;
@@ -961,7 +1248,201 @@ internal static class ProtoCodecEmitter
         return new string(chars);
     }
 
-    private sealed class MessageShape
+
+    private enum ConstructionKind
+    {
+        ParameterlessThenSet = 0,
+        ObjectInitializer = 1,
+        Constructor = 2
+    }
+
+    private sealed class ConstructionPlan
+    {
+        public ConstructionKind Kind { get; }
+        public System.Collections.Immutable.ImmutableArray<string> CtorParameterPropertyNames { get; }
+        public System.Collections.Generic.HashSet<string> SettableProperties { get; }
+
+        private ConstructionPlan(
+            ConstructionKind kind,
+            System.Collections.Immutable.ImmutableArray<string> ctorParams,
+            System.Collections.Generic.HashSet<string> settable)
+        {
+            Kind = kind;
+            CtorParameterPropertyNames = ctorParams;
+            SettableProperties = settable;
+        }
+
+        public static ConstructionPlan ParameterlessSet(System.Collections.Generic.HashSet<string> settable)
+            => new(ConstructionKind.ParameterlessThenSet, System.Collections.Immutable.ImmutableArray<string>.Empty, settable);
+
+        public static ConstructionPlan ObjectInit()
+            => new(ConstructionKind.ObjectInitializer, System.Collections.Immutable.ImmutableArray<string>.Empty, new System.Collections.Generic.HashSet<string>());
+
+        public static ConstructionPlan Ctor(System.Collections.Immutable.ImmutableArray<string> paramProps)
+            => new(ConstructionKind.Constructor, paramProps, new System.Collections.Generic.HashSet<string>());
+    }
+
+    /// <summary>
+    /// Chooses how to build a message type after fields are read into locals:
+    /// 1) Public ctor whose parameters match property names (records primary ctor, private-set classes)
+    /// 2) Object initializer when parameterless ctor + public set/init on all fields
+    /// 3) Parameterless ctor + assign public setters only
+    /// </summary>
+    private static class ConstructionAnalyzer
+    {
+        public static ConstructionPlan Analyze(
+            Compilation compilation,
+            string clrTypeName,
+            System.Collections.Generic.IReadOnlyList<ProtoFieldModel> fields)
+        {
+            var fieldNames = fields.Select(f => f.Name).ToList();
+            var type = ResolveType(compilation, clrTypeName);
+            if (type is null)
+            {
+                // Fallback: classic mutable POCO
+                return ConstructionPlan.ParameterlessSet(new HashSet<string>(fieldNames, StringComparer.Ordinal));
+            }
+
+            var props = type.GetMembers()
+                .OfType<IPropertySymbol>()
+                .Where(p => !p.IsStatic && p.GetMethod is not null)
+                .ToList();
+
+            var publicCtors = type.InstanceConstructors
+                .Where(c => c.DeclaredAccessibility == Accessibility.Public && !c.IsStatic)
+                .ToList();
+
+            // Prefer parameterized ctor (primary record ctor / explicit ctor) with name-matched params
+            ConstructionPlan? bestCtor = null;
+            var bestScore = -1;
+            foreach (var ctor in publicCtors.Where(c => c.Parameters.Length > 0))
+            {
+                var mapped = new List<string>();
+                var ok = true;
+                foreach (var param in ctor.Parameters)
+                {
+                    var prop = props.FirstOrDefault(p =>
+                        string.Equals(p.Name, param.Name, StringComparison.OrdinalIgnoreCase));
+                    if (prop is null)
+                    {
+                        if (param.HasExplicitDefaultValue)
+                        {
+                            mapped.Add("default!");
+                            continue;
+                        }
+                        ok = false;
+                        break;
+                    }
+                    mapped.Add(prop.Name);
+                }
+                if (!ok)
+                    continue;
+                var score = mapped.Count(m => m != "default!");
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestCtor = ConstructionPlan.Ctor(mapped.ToImmutableArray());
+                }
+            }
+            if (bestCtor is not null && bestScore > 0)
+                return bestCtor;
+
+            var paramless = publicCtors.FirstOrDefault(c => c.Parameters.Length == 0);
+            if (paramless is not null)
+            {
+                var settable = new HashSet<string>(StringComparer.Ordinal);
+                var allInitOrPublicSet = true;
+                foreach (var name in fieldNames)
+                {
+                    var prop = props.FirstOrDefault(p => p.Name == name);
+                    if (prop?.SetMethod is null || prop.SetMethod.DeclaredAccessibility != Accessibility.Public)
+                    {
+                        allInitOrPublicSet = false;
+                        continue;
+                    }
+                    settable.Add(name);
+                }
+
+                if (allInitOrPublicSet && settable.Count == fieldNames.Count)
+                    return ConstructionPlan.ObjectInit();
+
+                if (settable.Count > 0)
+                    return ConstructionPlan.ParameterlessSet(settable);
+
+                // parameterless but nothing settable — still try object initializer (may fail at compile for private set)
+                return ConstructionPlan.ObjectInit();
+            }
+
+            // No public parameterless ctor — last attempt: any public ctor with all params matchable
+            foreach (var ctor in publicCtors.OrderByDescending(c => c.Parameters.Length))
+            {
+                var mapped = new List<string>();
+                var ok = true;
+                foreach (var param in ctor.Parameters)
+                {
+                    var prop = props.FirstOrDefault(p => string.Equals(p.Name, param.Name, StringComparison.OrdinalIgnoreCase));
+                    if (prop is null) { ok = false; break; }
+                    mapped.Add(prop.Name);
+                }
+                if (ok)
+                    return ConstructionPlan.Ctor(mapped.ToImmutableArray());
+            }
+
+            return ConstructionPlan.ParameterlessSet(new HashSet<string>(fieldNames, StringComparer.Ordinal));
+        }
+
+        private static INamedTypeSymbol? ResolveType(Compilation compilation, string clrTypeName)
+        {
+            if (string.IsNullOrEmpty(clrTypeName))
+                return null;
+            var name = clrTypeName.Trim();
+            if (name.StartsWith("global::", StringComparison.Ordinal))
+                name = name.Substring("global::".Length);
+
+            var byMetadata = compilation.GetTypeByMetadataName(name);
+            if (byMetadata is not null)
+                return byMetadata;
+
+            // Try with + for nested types already using .
+            // Search among referenced symbols — fallback scan is expensive; try common replacements
+            byMetadata = compilation.GetTypeByMetadataName(name.Replace('+', '.'));
+            if (byMetadata is not null)
+                return byMetadata;
+
+            // Last resort: match by display string among source-defined types is not available without visit.
+            // Visitors: walk global namespace shallow for exact display match
+            return FindByDisplayName(compilation.GlobalNamespace, name, clrTypeName);
+        }
+
+        private static INamedTypeSymbol? FindByDisplayName(INamespaceSymbol ns, string name, string original)
+        {
+            foreach (var type in ns.GetTypeMembers())
+            {
+                var d = type.ToDisplayString();
+                if (d == name || d == original || type.Name == SimpleTypeName(name))
+                {
+                    if (!type.IsGenericType || d == name || d == original)
+                        return type;
+                }
+                foreach (var nested in type.GetTypeMembers())
+                {
+                    var nd = nested.ToDisplayString();
+                    if (nd == name || nd == original)
+                        return nested;
+                }
+            }
+            foreach (var child in ns.GetNamespaceMembers())
+            {
+                var found = FindByDisplayName(child, name, original);
+                if (found is not null)
+                    return found;
+            }
+            return null;
+        }
+    }
+
+
+        private sealed class MessageShape
     {
         public string ClrTypeName { get; set; }
         public string MessageName { get; }
