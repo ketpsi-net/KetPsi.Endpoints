@@ -8,22 +8,13 @@ namespace KetPsi.Endpoints.Grpc.Wire;
 public ref struct ProtoWireWriter
 {
     private IBufferWriter<byte> _output;
-    private byte[] _scratch;
 
     public ProtoWireWriter(IBufferWriter<byte> output)
     {
         _output = output;
-        _scratch = ArrayPool<byte>.Shared.Rent(16);
     }
 
-    public void Dispose()
-    {
-        if (_scratch.Length > 0)
-        {
-            ArrayPool<byte>.Shared.Return(_scratch);
-            _scratch = Array.Empty<byte>();
-        }
-    }
+    public void Dispose() { }
 
     public void WriteTag(int fieldNumber, ProtoWireType wireType)
         => WriteVarint((uint)((fieldNumber << 3) | (int)wireType));
@@ -43,7 +34,11 @@ public ref struct ProtoWireWriter
 
     public void WriteVarint(uint value) => WriteVarint((ulong)value);
 
-    public void WriteInt32(int value) => WriteVarint(unchecked((uint)value));
+    /// <summary>
+    /// Protobuf encodes negative int32 as a 64-bit sign-extended varint (up to 10 bytes).
+    /// </summary>
+    public void WriteInt32(int value) => WriteVarint(unchecked((ulong)(long)value));
+
     public void WriteInt64(long value) => WriteVarint(unchecked((ulong)value));
     public void WriteUInt32(uint value) => WriteVarint(value);
     public void WriteUInt64(ulong value) => WriteVarint(value);
@@ -66,6 +61,13 @@ public ref struct ProtoWireWriter
     public void WriteFloat(float value) => WriteFixed32(unchecked((uint)BitConverter.SingleToInt32Bits(value)));
     public void WriteDouble(double value) => WriteFixed64(unchecked((ulong)BitConverter.DoubleToInt64Bits(value)));
 
+    /// <summary>
+    /// Length-delimited payload: varint length prefix + raw bytes.
+    /// Used after <c>WriteTag(n, LengthDelimited)</c> for nested messages / bytes fields.
+    /// </summary>
+    public void WriteLengthDelimitedBytes(ReadOnlySpan<byte> data)
+        => WriteBytes(data);
+
     public void WriteBytes(ReadOnlySpan<byte> data)
     {
         WriteVarint((uint)data.Length);
@@ -81,16 +83,12 @@ public ref struct ProtoWireWriter
             WriteVarint(0u);
             return;
         }
-        var count = Encoding.UTF8.GetByteCount(value);
-        WriteVarint((uint)count);
-        var span = _output.GetSpan(count);
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        WriteVarint((uint)byteCount);
+        var span = _output.GetSpan(byteCount);
         Encoding.UTF8.GetBytes(value, span);
-        _output.Advance(count);
+        _output.Advance(byteCount);
     }
-
-    /// <summary>Writes a length-delimited blob already fully encoded.</summary>
-    public void WriteLengthDelimitedBytes(ReadOnlySpan<byte> payload)
-        => WriteBytes(payload);
 }
 
 public enum ProtoWireType
