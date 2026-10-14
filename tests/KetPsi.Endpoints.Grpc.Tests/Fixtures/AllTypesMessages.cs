@@ -1,7 +1,7 @@
 using KetPsi.Endpoints.Abstractions;
 using KetPsi.Endpoints.Grpc.Abstractions;
 
-namespace KetPsi.Endpoints.Grpc.Codec.Tests.Fixtures;
+namespace KetPsi.Endpoints.Grpc.Tests.Fixtures;
 
 /// <summary>
 /// Exhaustive message covering every CLR type the generator maps to protobuf.
@@ -63,7 +63,10 @@ public sealed class CollectionsMessage
     public List<NestedItem> NestedList { get; set; } = new();
     public NestedItem[] NestedArray { get; set; } = Array.Empty<NestedItem>();
     public byte[] RawBytes { get; set; } = Array.Empty<byte>();
+    public Dictionary<string, int> Scores { get; set; } = new();
+    public Dictionary<string, NestedItem> ItemsByKey { get; set; } = new();
 }
+
 
 public sealed class NestedItem
 {
@@ -136,7 +139,9 @@ public sealed class CollectionsMessageConfig : IProtoTypeConfiguration<Collectio
             .Property(x => x.EnumList, 4)
             .Property(x => x.NestedList, 5)
             .Property(x => x.NestedArray, 6)
-            .Property(x => x.RawBytes, 7);
+            .Property(x => x.RawBytes, 7)
+            .Property(x => x.Scores, 8)
+            .Property(x => x.ItemsByKey, 9);
     }
 }
 
@@ -185,3 +190,86 @@ public sealed class NestedRootHandler : IEndpoint
     public Task<EchoResponse> ExecuteAsync(NestedRootMessage request, CancellationToken ct)
         => Task.FromResult(new EchoResponse { Ok = "nested" });
 }
+
+
+// ---- Construction shapes: primary ctor record, private-set class, init-only record ----
+
+public sealed record PrimaryCtorOrder(string Sku, int Quantity, Guid OrderId);
+
+public sealed class PrimaryCtorOrderConfig : IProtoTypeConfiguration<PrimaryCtorOrder>
+{
+    public void Configure(IProtoTypeBuilder<PrimaryCtorOrder> builder) =>
+        builder.Property(x => x.Sku, 1).Property(x => x.Quantity, 2).Property(x => x.OrderId, 3);
+}
+
+public sealed class PrivateSetterOrder
+{
+    public PrivateSetterOrder(string sku, int quantity)
+    {
+        Sku = sku;
+        Quantity = quantity;
+    }
+
+    public string Sku { get; private set; }
+    public int Quantity { get; private set; }
+}
+
+public sealed class PrivateSetterOrderConfig : IProtoTypeConfiguration<PrivateSetterOrder>
+{
+    public void Configure(IProtoTypeBuilder<PrivateSetterOrder> builder) =>
+        builder.Property(x => x.Sku, 1).Property(x => x.Quantity, 2);
+}
+
+public sealed record InitOnlyOrder
+{
+    public string Sku { get; init; } = "";
+    public int Quantity { get; init; }
+    public SampleStatus Status { get; init; }
+}
+
+public sealed class InitOnlyOrderConfig : IProtoTypeConfiguration<InitOnlyOrder>
+{
+    public void Configure(IProtoTypeBuilder<InitOnlyOrder> builder) =>
+        builder.Property(x => x.Sku, 1).Property(x => x.Quantity, 2).Property(x => x.Status, 3);
+}
+
+public sealed class MapOnlyMessage
+{
+    public Dictionary<string, int> Scores { get; set; } = new();
+    public Dictionary<int, string> Labels { get; set; } = new();
+    public Dictionary<string, NestedItem> ItemsByKey { get; set; } = new();
+}
+
+public sealed class MapOnlyMessageConfig : IProtoTypeConfiguration<MapOnlyMessage>
+{
+    public void Configure(IProtoTypeBuilder<MapOnlyMessage> builder) =>
+        builder
+            .Property(x => x.Scores, 1)
+            .Property(x => x.Labels, 2)
+            .Property(x => x.ItemsByKey, 3);
+}
+
+public sealed class PrimaryCtorOrderHandler : IEndpoint
+{
+    public Task<EchoResponse> ExecuteAsync(PrimaryCtorOrder request, CancellationToken ct)
+        => Task.FromResult(new EchoResponse { Ok = "primary-ctor" });
+}
+
+public sealed class PrivateSetterOrderHandler : IEndpoint
+{
+    public Task<EchoResponse> ExecuteAsync(PrivateSetterOrder request, CancellationToken ct)
+        => Task.FromResult(new EchoResponse { Ok = "private-set" });
+}
+
+public sealed class InitOnlyOrderHandler : IEndpoint
+{
+    public Task<EchoResponse> ExecuteAsync(InitOnlyOrder request, CancellationToken ct)
+        => Task.FromResult(new EchoResponse { Ok = "init-only" });
+}
+
+public sealed class MapOnlyHandler : IEndpoint
+{
+    public Task<EchoResponse> ExecuteAsync(MapOnlyMessage request, CancellationToken ct)
+        => Task.FromResult(new EchoResponse { Ok = "map" });
+}
+

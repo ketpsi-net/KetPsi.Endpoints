@@ -103,7 +103,7 @@ internal static class ProtoSchemaEmitter
         foreach (var (name, number) in config.Fields)
         {
             if (byName.TryGetValue(name, out var prev))
-                result.Add(new ProtoFieldModel(name, number, prev.ProtoType, prev.ClrTypeHint, prev.IsNullable, prev.Kind, prev.ElementProtoType, prev.ElementClrHint, prev.ElementKind, prev.IsArray));
+                result.Add(new ProtoFieldModel(name, number, prev.ProtoType, prev.ClrTypeHint, prev.IsNullable, prev.Kind, prev.ElementProtoType, prev.ElementClrHint, prev.ElementKind, prev.IsArray, prev.MapKeyProtoType, prev.MapKeyClrHint, prev.MapKeyKind));
             else
                 result.Add(new ProtoFieldModel(name, number, "string", ""));
         }
@@ -307,8 +307,9 @@ internal static class ProtoSchemaEmitter
             }
             case FieldKind.Enum:
                 return SanitizeProtoIdent(string.IsNullOrEmpty(field.ProtoType) ? SimpleName(field.ClrTypeHint, "Enum") : field.ProtoType);
+            case FieldKind.Map:
+                return string.IsNullOrEmpty(field.ProtoType) ? "map<string, string>" : field.ProtoType;
             case FieldKind.Message:
-                // may be map<K,V> stored in ProtoType
                 if (field.ProtoType.StartsWith("map<", StringComparison.Ordinal))
                     return field.ProtoType;
                 return SanitizeProtoIdent(string.IsNullOrEmpty(field.ProtoType) ? field.ClrTypeHint : field.ProtoType);
@@ -377,7 +378,46 @@ internal static class ProtoSchemaEmitter
             return "_" + new string(chars);
         return new string(chars);
     }
+    /// <summary>
+    /// Types that must never become nested protobuf messages / codecs
+    /// (e.g. System.Type → Assembly, TypeAttributes, …).
+    /// </summary>
+    private static bool IsNonMessageBclType(ITypeSymbol type, string? fullDisplay = null)
+    {
+        var full = fullDisplay ?? type.ToDisplayString();
+        if (full.StartsWith("global::", StringComparison.Ordinal))
+            full = full.Substring("global::".Length);
 
+        // Well-known value-like mappings handled elsewhere
+        if (full is "System.Guid" or "System.TimeSpan" or "System.DateTimeOffset"
+            or "System.DateTime" or "System.Decimal" or "System.Object")
+            return true;
+
+        // Reflection / type-system graph (causes Read_Type with Assembly, TypeAttributes, …)
+        if (full is "System.Type" or "System.RuntimeType" or "System.Reflection.TypeInfo"
+            or "System.Reflection.Assembly" or "System.Reflection.Module"
+            or "System.Reflection.MemberInfo" or "System.Reflection.MethodInfo"
+            or "System.Reflection.PropertyInfo" or "System.Reflection.FieldInfo"
+            or "System.Reflection.ConstructorInfo" or "System.Reflection.ParameterInfo"
+            or "System.Reflection.EventInfo" or "System.Delegate" or "System.MulticastDelegate"
+            or "System.Enum" or "System.ValueType" or "System.Array")
+            return true;
+
+        if (full.StartsWith("System.Reflection.", StringComparison.Ordinal))
+            return true;
+        if (full.StartsWith("System.Runtime.Serialization.", StringComparison.Ordinal))
+            return true;
+        if (full.StartsWith("System.Linq.Expressions.", StringComparison.Ordinal))
+            return true;
+
+        // Abstract framework types are never DTOs
+        if (type.IsAbstract && type.SpecialType == SpecialType.None &&
+            (full.StartsWith("System.", StringComparison.Ordinal) ||
+             full.StartsWith("Microsoft.", StringComparison.Ordinal)))
+            return true;
+
+        return false;
+    }
     public static (System.Collections.Immutable.ImmutableArray<NestedMessageModel> Nested, System.Collections.Immutable.ImmutableArray<EnumDefinitionModel> Enums) CollectTypeGraph(
         ITypeSymbol? request, ITypeSymbol? response)
     {
@@ -420,10 +460,28 @@ internal static class ProtoSchemaEmitter
                 return;
             }
 
+            if (IsMap(type, out var mapKey, out var mapVal))
+            {
+                Walk(mapKey);
+                Walk(mapVal);
+                return;
+            }
+
             if (IsRepeated(type, out var elem))
             {
                 Walk(elem);
                 return;
+            }
+
+            // Never treat BCL collection types as nested messages
+            if (type is INamedTypeSymbol ncol)
+            {
+                var def = ncol.OriginalDefinition.ToDisplayString();
+                if (def.StartsWith("System.Collections.", StringComparison.Ordinal) ||
+                    def.StartsWith("System.Collections.Generic.", StringComparison.Ordinal) ||
+                    def.StartsWith("System.Collections.Concurrent.", StringComparison.Ordinal) ||
+                    def.StartsWith("System.Collections.Immutable.", StringComparison.Ordinal))
+                    return;
             }
 
             if (type is IArrayTypeSymbol arr)
@@ -437,9 +495,9 @@ internal static class ProtoSchemaEmitter
                 return;
             if (type.SpecialType != SpecialType.None)
                 return;
-            // skip framework primitives already classified
+            // skip framework primitives / non-DTO BCL types (never emit message codecs for these)
             var full = type.ToDisplayString();
-            if (full is "System.Guid" or "System.TimeSpan" or "System.DateTimeOffset")
+            if (IsNonMessageBclType(type, full))
                 return;
 
             var key = type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
@@ -513,6 +571,20 @@ internal static class ProtoSchemaEmitter
         var type = prop.Type;
         var nullable = IsNullableProp(prop);
         var underlying = UnwrapNullable(type);
+
+        if (IsMap(underlying, out var keyType, out var valType))
+        {
+            var (kProto, _, kKind) = Classify(keyType);
+            var (vProto, _, vKind) = Classify(valType);
+            var kClr = CleanClr(keyType.ToDisplayString());
+            var vClr = CleanClr(valType.ToDisplayString());
+            var collClr = CleanClr(underlying.ToDisplayString());
+            return new ProtoFieldModel(
+                prop.Name, number, $"map<{kProto}, {vProto}>", collClr,
+                isNullable: true, kind: FieldKind.Map,
+                elementProtoType: vProto, elementClrHint: vClr, elementKind: vKind,
+                mapKeyProtoType: kProto, mapKeyClrHint: kClr, mapKeyKind: kKind);
+        }
 
         if (IsRepeated(underlying, out var elem))
         {
@@ -605,9 +677,13 @@ internal static class ProtoSchemaEmitter
             {
                 var (kProto, _, _) = Classify(mapNamed.TypeArguments[0]);
                 var (vProto, _, _) = Classify(mapNamed.TypeArguments[1]);
-                return ($"map<{kProto}, {vProto}>", full, FieldKind.Message); // treat as special in schema
+                return ($"map<{kProto}, {vProto}>", full, FieldKind.Map);
             }
         }
+
+        // Never treat reflection / Type as a nested message
+        if (IsNonMessageBclType(type))
+            return ("string", type.ToDisplayString(), FieldKind.String);
 
         var msgName = name.Replace("+", "_");
         if (type is INamedTypeSymbol { IsGenericType: true } named)
@@ -615,7 +691,38 @@ internal static class ProtoSchemaEmitter
         return (msgName, type.ToDisplayString(), FieldKind.Message);
     }
 
-    private static bool IsRepeated(ITypeSymbol type, out ITypeSymbol element)
+    
+    private static string CleanClr(string clr)
+    {
+        if (string.IsNullOrEmpty(clr)) return clr;
+        if (clr.StartsWith("global::", StringComparison.Ordinal))
+            clr = clr.Substring("global::".Length);
+        if (clr.EndsWith("?", StringComparison.Ordinal))
+            clr = clr.Substring(0, clr.Length - 1);
+        return clr;
+    }
+
+    private static bool IsMap(ITypeSymbol type, out ITypeSymbol key, out ITypeSymbol value)
+    {
+        key = type;
+        value = type;
+        if (type is not INamedTypeSymbol named || !named.IsGenericType || named.TypeArguments.Length != 2)
+            return false;
+        var def = named.OriginalDefinition.ToDisplayString();
+        if (def is "System.Collections.Generic.Dictionary<TKey, TValue>"
+            or "System.Collections.Generic.IDictionary<TKey, TValue>"
+            or "System.Collections.Generic.IReadOnlyDictionary<TKey, TValue>"
+            or "System.Collections.Concurrent.ConcurrentDictionary<TKey, TValue>"
+            or "System.Collections.Immutable.ImmutableDictionary<TKey, TValue>")
+        {
+            key = named.TypeArguments[0];
+            value = named.TypeArguments[1];
+            return true;
+        }
+        return false;
+    }
+
+private static bool IsRepeated(ITypeSymbol type, out ITypeSymbol element)
     {
         element = type;
         if (type is IArrayTypeSymbol arr)

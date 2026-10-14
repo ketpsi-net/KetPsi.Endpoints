@@ -25,9 +25,10 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
         var typeConfigs = context.CompilationProvider
             .Select(static (compilation, _) => GetTypeConfigsFromCompilation(compilation));
 
-        var combined = endpoints.Combine(typeConfigs);
+        var combined = endpoints.Combine(typeConfigs).Combine(context.CompilationProvider);
 
-        context.RegisterSourceOutput(combined, static (spc, data) => Execute(spc, data.Left!, data.Right));
+        context.RegisterSourceOutput(combined, static (spc, data) =>
+            Execute(spc, data.Left.Left!, data.Left.Right, data.Right));
     }
 
     private static bool IsMapGrpcInvocation(SyntaxNode node)
@@ -175,7 +176,8 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
     private static void Execute(
         SourceProductionContext context,
         ImmutableArray<GrpcEndpointModel?> endpoints,
-        ImmutableArray<TypeConfigModel> typeConfigs)
+        ImmutableArray<TypeConfigModel> typeConfigs,
+        Compilation compilation)
     {
         var validEndpoints = endpoints.Where(e => e is not null).Cast<GrpcEndpointModel>().ToImmutableArray();
 
@@ -282,7 +284,7 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
         context.AddSource("GeneratedGrpcRegistrationExtensions.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
 
         // Generated serialize/deserialize codecs from the same field maps as /proto
-        ProtoCodecEmitter.Emit(context, validEndpoints, typeConfigs);
+        ProtoCodecEmitter.Emit(context, validEndpoints, typeConfigs, compilation);
 
         EmitGrpcServices(context, validEndpoints);
     }
