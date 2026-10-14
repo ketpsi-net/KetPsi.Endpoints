@@ -13,6 +13,8 @@ public ref struct ProtoWireReader
     }
 
     public bool IsAtEnd => _pos >= _data.Length;
+    public int Position => _pos;
+    public int Length => _data.Length;
 
     public bool TryReadTag(out int fieldNumber, out ProtoWireType wireType)
     {
@@ -27,17 +29,8 @@ public ref struct ProtoWireReader
 
     public uint ReadVarint32()
     {
-        uint result = 0;
-        var shift = 0;
-        while (shift < 35)
-        {
-            if (_pos >= _data.Length) throw new InvalidOperationException("Truncated varint.");
-            var b = _data[_pos++];
-            result |= (uint)(b & 0x7F) << shift;
-            if ((b & 0x80) == 0) return result;
-            shift += 7;
-        }
-        throw new InvalidOperationException("Malformed varint.");
+        // Allow full 64-bit varint then truncate — negative int32 arrives as 10-byte varint.
+        return unchecked((uint)ReadVarint64());
     }
 
     public ulong ReadVarint64()
@@ -55,11 +48,13 @@ public ref struct ProtoWireReader
         throw new InvalidOperationException("Malformed varint.");
     }
 
-    public int ReadInt32() => unchecked((int)ReadVarint32());
+    /// <summary>int32 on the wire is a varint; negatives are sign-extended to 64 bits.</summary>
+    public int ReadInt32() => unchecked((int)(long)ReadVarint64());
+
     public long ReadInt64() => unchecked((long)ReadVarint64());
-    public uint ReadUInt32() => ReadVarint32();
+    public uint ReadUInt32() => unchecked((uint)ReadVarint64());
     public ulong ReadUInt64() => ReadVarint64();
-    public bool ReadBool() => ReadVarint32() != 0;
+    public bool ReadBool() => ReadVarint64() != 0;
 
     public uint ReadFixed32()
     {
@@ -95,6 +90,24 @@ public ref struct ProtoWireReader
         return bytes.Length == 0 ? string.Empty : System.Text.Encoding.UTF8.GetString(bytes);
     }
 
+    /// <summary>
+    /// Reads a packed repeated scalar block (length-delimited). Caller supplies a per-element reader
+    /// that advances this reader until <paramref name="end"/> is reached.
+    /// </summary>
+    public void ReadPacked(int endExclusive, System.Action readOne)
+    {
+        while (_pos < endExclusive)
+            readOne();
+    }
+
+    /// <summary>Mark end position after reading a length-delimited packed payload length.</summary>
+    public int BeginPacked()
+    {
+        var len = (int)ReadVarint32();
+        if (len < 0 || _pos + len > _data.Length) throw new InvalidOperationException("Truncated packed field.");
+        return _pos + len;
+    }
+
     public void SkipField(ProtoWireType wireType)
     {
         switch (wireType)
@@ -103,9 +116,11 @@ public ref struct ProtoWireReader
                 _ = ReadVarint64();
                 break;
             case ProtoWireType.Fixed32:
+                if (_pos + 4 > _data.Length) throw new InvalidOperationException("Truncated fixed32.");
                 _pos += 4;
                 break;
             case ProtoWireType.Fixed64:
+                if (_pos + 8 > _data.Length) throw new InvalidOperationException("Truncated fixed64.");
                 _pos += 8;
                 break;
             case ProtoWireType.LengthDelimited:

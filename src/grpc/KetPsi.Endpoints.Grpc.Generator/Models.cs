@@ -8,12 +8,27 @@ internal sealed class TypeConfigModel
     public string TargetTypeName { get; }
     /// <summary>Property name → field number from Configure(... Property(x => x.Foo, n)).</summary>
     public System.Collections.Immutable.ImmutableArray<(string Name, int Number)> Fields { get; }
+    /// <summary>Property name → metadata key from Configure(... FromMetadata(x => x.Foo, "key")).</summary>
+    public System.Collections.Immutable.ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> MetadataBindings { get; }
+    /// <summary>Fully-qualified interceptor type names from AddInterceptor&lt;T&gt;().</summary>
+    public System.Collections.Immutable.ImmutableArray<string> Interceptors { get; }
 
-    public TypeConfigModel(string configClassName, string targetTypeName, System.Collections.Immutable.ImmutableArray<(string Name, int Number)> fields = default)
+    public TypeConfigModel(
+        string configClassName,
+        string targetTypeName,
+        System.Collections.Immutable.ImmutableArray<(string Name, int Number)> fields = default,
+        System.Collections.Immutable.ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> metadataBindings = default,
+        System.Collections.Immutable.ImmutableArray<string> interceptors = default)
     {
         ConfigClassName = configClassName;
         TargetTypeName = targetTypeName;
         Fields = fields.IsDefault ? System.Collections.Immutable.ImmutableArray<(string, int)>.Empty : fields;
+        MetadataBindings = metadataBindings.IsDefault
+            ? System.Collections.Immutable.ImmutableArray<(string, string, string, string)>.Empty
+            : metadataBindings;
+        Interceptors = interceptors.IsDefault
+            ? System.Collections.Immutable.ImmutableArray<string>.Empty
+            : interceptors;
     }
 }
 
