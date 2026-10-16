@@ -123,6 +123,7 @@ jobs:
         with:
           package_name: KetPsi.Endpoints.Http.Abstractions
           package_version: ${{ github.ref_name }}
+
   deploy-endpoint-http:
     needs: [wait-for-http-abstractions-package, wait-for-abstractions-package]
     runs-on: self-hosted
@@ -142,3 +143,55 @@ jobs:
         uses: ./.github/workflows/actions/nuget-push
         with:
           package_path: 'pack/KetPsi.Endpoints.Http.${{ github.ref_name }}.nupkg'
+
+  deploy-grpc-abstractions:
+    needs: [deploy-prerequisite]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Pack KetPsi.Endpoints.Grpc.Abstractions
+        id: pack-abstraction
+        uses: ./.github/workflows/actions/nuget-pack
+        with:
+          project_path: src/grpc/KetPsi.Endpoints.Grpc.Abstractions/KetPsi.Endpoints.Grpc.Abstractions.csproj
+      - name: Push KetPsi.Endpoints.Grpc.Abstractions
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
+        uses: ./.github/workflows/actions/nuget-push
+        with:
+          package_path: 'pack/KetPsi.Endpoints.Grpc.Abstractions.${{ github.ref_name }}.nupkg'
+
+  wait-for-grpc-abstractions-package:
+    needs: [deploy-grpc-abstractions]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for KetPsi.Endpoints.Grpc.Abstractions
+        uses: ./.github/workflows/actions/nuget-wait
+        with:
+          package_name: KetPsi.Endpoints.Grpc.Abstractions
+          package_version: ${{ github.ref_name }}
+
+  deploy-endpoint-grpc:
+    needs: [wait-for-grpc-abstractions-package, wait-for-abstractions-package]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Pack KetPsi.Endpoints.Grpc
+        id: pack-grpc
+        uses: ./.github/workflows/actions/nuget-pack
+        with:
+          projects_to_build_path: src/grpc/KetPsi.Endpoints.Grpc.Generator/KetPsi.Endpoints.Grpc.Generator.csproj
+          project_path: src/grpc/KetPsi.Endpoints.Grpc/KetPsi.Endpoints.Grpc.csproj
+      - name: Push KetPsi.Endpoints.Grpc
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
+        uses: ./.github/workflows/actions/nuget-push
+        with:
+          package_path: 'pack/KetPsi.Endpoints.Grpc.${{ github.ref_name }}.nupkg'

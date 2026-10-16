@@ -1,0 +1,985 @@
+using System.Collections.Immutable;
+using System.Text;
+
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Text;
+
+namespace KetPsi.Endpoints.Grpc.Generator;
+
+/// <summary>
+/// Emits DI registration, MapGrpcEndpoints, and the optional UseProtoEndpoint extension.
+/// </summary>
+[Generator]
+public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        var endpoints = context.SyntaxProvider
+            .CreateSyntaxProvider(
+                predicate: static (s, _) => IsMapGrpcInvocation(s),
+                transform: static (ctx, _) => GetEndpointModel(ctx))
+            .Where(static m => m is not null)
+            .Collect();
+
+        var typeConfigs = context.CompilationProvider
+            .Select(static (compilation, _) => GetTypeConfigsFromCompilation(compilation));
+
+        var combined = endpoints.Combine(typeConfigs).Combine(context.CompilationProvider);
+
+        context.RegisterSourceOutput(combined, static (spc, data) =>
+            Execute(spc, data.Left.Left!, data.Left.Right, data.Right));
+    }
+
+    private static bool IsMapGrpcInvocation(SyntaxNode node)
+    {
+        return node is InvocationExpressionSyntax invocation &&
+               invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+               memberAccess.Name.Identifier.Text.StartsWith("MapGrpc", StringComparison.Ordinal);
+    }
+
+    private static GrpcEndpointModel? GetEndpointModel(GeneratorSyntaxContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        if (context.SemanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol methodSymbol)
+            return null;
+
+        if (!methodSymbol.Name.StartsWith("MapGrpc", StringComparison.Ordinal) || methodSymbol.TypeArguments.Length != 1)
+            return null;
+
+        if (methodSymbol.TypeArguments[0] is not INamedTypeSymbol handlerType)
+            return null;
+
+        var argument = invocation.ArgumentList.Arguments.FirstOrDefault();
+        if (argument?.Expression is not LiteralExpressionSyntax literal)
+            return null;
+
+        var route = literal.Token.ValueText;
+        var segments = route.Split('/');
+
+        if (segments.Length is < 2 or > 3)
+            return null;
+
+        var grpcNamespace = segments.Length == 3 ? segments[0] : "Api";
+        var serviceName = segments.Length == 3 ? segments[1] : segments[0];
+        var methodName = segments.Length == 3 ? segments[2] : segments[1];
+        var finalGrpcRoute = $"{grpcNamespace}.{serviceName}";
+
+        var closedGenerics = new HashSet<string>(StringComparer.Ordinal);
+        var format = new SymbolDisplayFormat(
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters);
+
+        var executeMethod = handlerType.GetMembers()
+            .OfType<IMethodSymbol>()
+            .FirstOrDefault(m => m.Name == "ExecuteAsync");
+
+        string requestTypeString = "";
+        string returnTypeString = "";
+        bool isStream = false;
+
+        if (executeMethod is not null)
+        {
+            if (executeMethod.Parameters.Length > 0)
+                requestTypeString = executeMethod.Parameters[0].Type.ToDisplayString();
+
+            returnTypeString = executeMethod.ReturnType.ToDisplayString();
+
+            void ExtractOnlyFromSignature(ITypeSymbol? typeSymbol)
+            {
+                if (typeSymbol is null)
+                    return;
+
+                var isEligibleDataContract =
+                    (typeSymbol.TypeKind is TypeKind.Class or TypeKind.Struct) && !typeSymbol.IsAbstract;
+
+                if (typeSymbol is INamedTypeSymbol namedType && namedType.IsGenericType)
+                {
+                    var baseName = namedType.ConstructedFrom.ToDisplayString();
+
+                    // Unwrap system wrappers without registering them
+                    if (baseName.StartsWith("System.Threading.Tasks.Task", StringComparison.Ordinal) ||
+                        baseName.StartsWith("System.Threading.Tasks.ValueTask", StringComparison.Ordinal) ||
+                        baseName.StartsWith("System.Collections.Generic.IEnumerable", StringComparison.Ordinal) ||
+                        baseName.StartsWith("System.Collections.Generic.IAsyncEnumerable", StringComparison.Ordinal) ||
+                        baseName.StartsWith("System.Collections.Generic.List", StringComparison.Ordinal))
+                    {
+                        foreach (var arg in namedType.TypeArguments)
+                            ExtractOnlyFromSignature(arg);
+                        return;
+                    }
+
+                    if (!namedType.IsUnboundGenericType && isEligibleDataContract)
+                    {
+                        var fqn = namedType.ToDisplayString(format);
+
+                        if (!fqn.StartsWith("global::System", StringComparison.Ordinal) &&
+                            !fqn.StartsWith("global::Microsoft", StringComparison.Ordinal))
+                        {
+                            closedGenerics.Add(fqn);
+                        }
+                    }
+
+                    foreach (var arg in namedType.TypeArguments)
+                        ExtractOnlyFromSignature(arg);
+                }
+            }
+
+            foreach (var p in executeMethod.Parameters)
+                ExtractOnlyFromSignature(p.Type);
+            ExtractOnlyFromSignature(executeMethod.ReturnType);
+
+            isStream = returnTypeString.Contains("IAsyncEnumerable") ||
+                       returnTypeString.Contains("IEnumerable");
+        }
+
+        ITypeSymbol? requestSymbol = null;
+        ITypeSymbol? responseSymbol = null;
+        if (executeMethod is not null)
+        {
+            if (executeMethod.Parameters.Length > 0)
+                requestSymbol = executeMethod.Parameters[0].Type;
+            responseSymbol = executeMethod.ReturnType;
+        }
+
+        var requestFields = ProtoSchemaEmitter.ExtractFields(requestSymbol);
+        var responseFields = ProtoSchemaEmitter.ExtractFields(responseSymbol);
+        var (nested, enums) = ProtoSchemaEmitter.CollectTypeGraph(requestSymbol, responseSymbol);
+
+        return new GrpcEndpointModel(
+            handlerType.Name,
+            handlerType.ToDisplayString(),
+            requestTypeString,
+            returnTypeString,
+            finalGrpcRoute,
+            methodName,
+            isStream,
+            closedGenerics.ToImmutableArray(),
+            grpcNamespace,
+            serviceName,
+            ProtoSchemaEmitter.MessageName(requestSymbol),
+            ProtoSchemaEmitter.MessageName(responseSymbol),
+            requestFields.Fields.ToImmutableArray(),
+            responseFields.Fields.ToImmutableArray(),
+            nested,
+            enums);
+    }
+
+    private static ImmutableArray<TypeConfigModel> GetTypeConfigsFromCompilation(Compilation compilation)
+    {
+        var visitor = new ServerGlobalTypeVisitor(compilation);
+        visitor.Visit(compilation.GlobalNamespace);
+        return visitor.TypeConfigs.ToImmutableArray();
+    }
+
+    private static void Execute(
+        SourceProductionContext context,
+        ImmutableArray<GrpcEndpointModel?> endpoints,
+        ImmutableArray<TypeConfigModel> typeConfigs,
+        Compilation compilation)
+    {
+        var validEndpoints = endpoints.Where(e => e is not null).Cast<GrpcEndpointModel>().ToImmutableArray();
+
+        var closedGenerics = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var ep in validEndpoints)
+        {
+            foreach (var gen in ep.ClosedGenerics)
+                closedGenerics.Add(gen);
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("// <auto-generated/>");
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("using Microsoft.AspNetCore.Builder;");
+        sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
+        sb.AppendLine("using Microsoft.Extensions.DependencyInjection.Extensions;");
+        sb.AppendLine("using KetPsi.Endpoints.Grpc;");
+        sb.AppendLine("using Grpc.AspNetCore.Server;");
+        sb.AppendLine();
+        sb.AppendLine("namespace Microsoft.Extensions.DependencyInjection");
+        sb.AppendLine("{");
+        sb.AppendLine("    public static class GeneratedGrpcRegistrationExtensions");
+        sb.AppendLine("    {");
+
+        // ---- AddGrpcServices ----
+        sb.AppendLine("        public static IServiceCollection AddGrpcServices(this IServiceCollection services)");
+        sb.AppendLine("        {");
+        var distinctHandlers = validEndpoints.Select(e => e.HandlerFullyQualifiedName).Distinct().ToList();
+        foreach (var handler in distinctHandlers)
+        {
+            sb.AppendLine($"            services.AddScoped<{handler}>();");
+        }
+
+        // Proxies must be in DI for MapGrpcService<T> resolution
+        var proxyNames = validEndpoints
+            .GroupBy(e => e.FinalGrpcRoute)
+            .Select(g => g.Key.Replace(".", "_") + "_Proxy")
+            .Distinct()
+            .ToList();
+        foreach (var proxy in proxyNames)
+        {
+            sb.AppendLine($"            services.AddScoped<global::KetPsi.Endpoints.Grpc.{proxy}>();");
+            var svc = proxy.Replace("_Proxy", "_GrpcService");
+            sb.AppendLine($"            services.AddScoped<global::KetPsi.Endpoints.Grpc.{svc}>();");
+        }
+
+        sb.AppendLine("            global::KetPsi.Endpoints.Grpc.GeneratedGrpcServiceMethodProviders.AddGeneratedGrpcServiceMethodProviders(services);");
+        // Register interceptor types used by per-method pipelines (resolved from RequestServices)
+        foreach (var interceptorFqn in CollectAllInterceptorTypes(typeConfigs))
+        {
+            sb.AppendLine($"            services.AddScoped<{interceptorFqn}>();");
+        }
+        sb.AppendLine("            return services;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
+        // ---- MapGrpcEndpoints (proxies only; /proto is UseProtoEndpoint) ----
+        sb.AppendLine("        public static WebApplication MapGrpcEndpoints(this WebApplication app)");
+        sb.AppendLine("        {");
+
+        // Compile-time pure wire codecs (no protobuf-net)
+        sb.AppendLine("            global::KetPsi.Endpoints.Grpc.GeneratedProtoCodecs.Register();");
+        sb.AppendLine();
+
+        var distinctServices = validEndpoints
+            .GroupBy(e => e.FinalGrpcRoute)
+            .Select(g => new
+            {
+                ServiceRoute = g.Key,
+                SanitizedName = g.Key.Replace(".", "_")
+            })
+            .ToList();
+
+        foreach (var service in distinctServices)
+        {
+            sb.AppendLine($"            {{");
+            sb.AppendLine($"                var __grpcEp = app.MapGrpcService<global::KetPsi.Endpoints.Grpc.{service.SanitizedName}_GrpcService>();");
+            sb.AppendLine($"                global::KetPsi.Endpoints.Grpc.GrpcEndpointConventionRegistry.Apply(\"{service.ServiceRoute}\", __grpcEp);");
+            sb.AppendLine($"            }}");
+        }
+
+        sb.AppendLine("            return app;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
+        // ---- UseProtoEndpoint (optional /proto — compile-time schema, no SchemaGenerator) ----
+        sb.AppendLine("        /// <summary>");
+        sb.AppendLine("        /// Maps the optional /proto endpoint that returns the aggregated protobuf schema");
+        sb.AppendLine("        /// for all discovered gRPC contracts. Schema is generated at compile time.");
+        sb.AppendLine("        /// </summary>");
+        sb.AppendLine("        public static WebApplication UseProtoEndpoint(this WebApplication app)");
+        sb.AppendLine("        {");
+
+        if (validEndpoints.Length > 0)
+        {
+            var endpointsForSchema = ProtoSchemaEmitter.ApplyTypeConfigFields(validEndpoints, typeConfigs);
+            var schema = ProtoSchemaEmitter.Emit(endpointsForSchema);
+            var escaped = schema.Replace("\"", "\"\"");
+            sb.AppendLine("            // Compile-time schema (equivalent to SchemaGenerator + TypeModel.GetSchema)");
+            sb.Append("            const string schema = @\"");
+            sb.Append(escaped);
+            sb.AppendLine("\";");
+            sb.AppendLine("            app.MapGet(\"/proto\", static () => Microsoft.AspNetCore.Http.Results.Text(schema, \"text/plain\"));");
+        }
+        // else: no contracts → no-op (matches the hand-written fallback)
+
+        sb.AppendLine("            return app;");
+        sb.AppendLine("        }");
+
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+
+        context.AddSource("GeneratedGrpcRegistrationExtensions.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+
+        // Generated serialize/deserialize codecs from the same field maps as /proto
+        ProtoCodecEmitter.Emit(context, validEndpoints, typeConfigs, compilation);
+
+        EmitGrpcServices(context, validEndpoints, typeConfigs, compilation);
+    }
+
+    /// <summary>
+    /// Visits the compilation solely to discover IProtoTypeConfiguration / IOpenProtoTypeConfiguration implementations.
+    /// </summary>
+
+    private static void EmitGrpcServices(SourceProductionContext context, ImmutableArray<GrpcEndpointModel> endpoints, ImmutableArray<TypeConfigModel> typeConfigs, Compilation compilation)
+    {
+        if (endpoints.IsDefaultOrEmpty)
+            return;
+
+        var groups = endpoints.GroupBy(e => e.FinalGrpcRoute).ToList();
+        var sb = new StringBuilder();
+        sb.AppendLine("// <auto-generated/>");
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("using System;");
+        sb.AppendLine("using System.Collections.Generic;");
+        sb.AppendLine("using System.Threading.Tasks;");
+        sb.AppendLine("using Grpc.AspNetCore.Server;");
+        sb.AppendLine("using Grpc.AspNetCore.Server.Model;");
+        sb.AppendLine("using Grpc.Core;");
+        sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
+        sb.AppendLine("using Microsoft.Extensions.DependencyInjection.Extensions;");
+        sb.AppendLine();
+        sb.AppendLine("namespace KetPsi.Endpoints.Grpc");
+        sb.AppendLine("{");
+
+        foreach (var g in groups)
+        {
+            var route = g.Key;
+            var sanitized = route.Replace(".", "_");
+            var methods = g.GroupBy(m => m.MethodName, StringComparer.Ordinal).Select(x => x.First()).ToList();
+            var handlers = methods.Select(m => m.HandlerFullyQualifiedName).Distinct().ToList();
+
+            // Service implementation (DI-created; never null when handling calls)
+            sb.AppendLine($"    public sealed class {sanitized}_GrpcService");
+            sb.AppendLine("    {");
+            for (var i = 0; i < handlers.Count; i++)
+                sb.AppendLine($"        private readonly {handlers[i]} _handler_{i};");
+            var ctorParams = string.Join(", ", handlers.Select((h, i) => h + " handler_" + i));
+            sb.AppendLine($"        public {sanitized}_GrpcService({ctorParams})");
+            sb.AppendLine("        {");
+            for (var i = 0; i < handlers.Count; i++)
+                sb.AppendLine($"            _handler_{i} = handler_{i};");
+            sb.AppendLine("        }");
+            foreach (var m in methods)
+            {
+                var hi = handlers.IndexOf(m.HandlerFullyQualifiedName);
+                var req = m.RequestTypeName;
+                var res = UnwrapTaskName(m.ResponseTypeName);
+                sb.AppendLine($"        public async Task<{res}> {m.MethodName}({req} request, ServerCallContext context)");
+                sb.AppendLine("        {");
+                sb.AppendLine($"            GrpcMetadataBinderGenerated.Apply_{SanitizeName(m.RequestMessageName)}(request, context);");
+                sb.AppendLine($"            return await _handler_{hi}.ExecuteAsync(request, context.CancellationToken).ConfigureAwait(false);");
+                sb.AppendLine("        }");
+            }
+            sb.AppendLine("    }");
+            sb.AppendLine();
+
+            // Public Method descriptors for clients (no protobuf-net CreateGrpcService)
+            sb.AppendLine($"    public static class {sanitized}_GrpcMethods");
+            sb.AppendLine("    {");
+            foreach (var m in methods)
+            {
+                var req = m.RequestTypeName;
+                var res = UnwrapTaskName(m.ResponseTypeName);
+                var reqSafe = SanitizeName(m.RequestMessageName);
+                var resSafe = SanitizeName(m.ResponseMessageName);
+                sb.AppendLine($"        public static readonly Method<{req}, {res}> {m.MethodName} = new Method<{req}, {res}>(");
+                sb.AppendLine("            MethodType.Unary,");
+                sb.AppendLine($"            \"{route}\",");
+                sb.AppendLine($"            \"{m.MethodName}\",");
+                sb.AppendLine($"            GeneratedProtoCodecs.Marshaller_{reqSafe},");
+                sb.AppendLine($"            GeneratedProtoCodecs.Marshaller_{resSafe});");
+            }
+            sb.AppendLine("    }");
+            sb.AppendLine();
+
+            // IServiceMethodProvider — no BindServiceMethod reflection, no null service instance
+            sb.AppendLine($"    public sealed class {sanitized}_ServiceMethodProvider : IServiceMethodProvider<{sanitized}_GrpcService>");
+            sb.AppendLine("    {");
+            sb.AppendLine($"        public void OnServiceMethodDiscovery(ServiceMethodProviderContext<{sanitized}_GrpcService> context)");
+            sb.AppendLine("        {");
+            var interceptorsByHandler = new Dictionary<string, ImmutableArray<string>>(StringComparer.Ordinal);
+            foreach (var c in typeConfigs)
+            {
+                if (c.Interceptors.IsDefaultOrEmpty) continue;
+                interceptorsByHandler[c.TargetTypeName] = c.Interceptors;
+                var simple = c.TargetTypeName;
+                var dot = simple.LastIndexOf('.');
+                if (dot >= 0) simple = simple.Substring(dot + 1);
+                if (!interceptorsByHandler.ContainsKey(simple))
+                    interceptorsByHandler[simple] = c.Interceptors;
+            }
+
+            foreach (var m in methods)
+            {
+                var req = m.RequestTypeName;
+                var res = UnwrapTaskName(m.ResponseTypeName);
+                ImmutableArray<string> interceptors = ImmutableArray<string>.Empty;
+                if (!interceptorsByHandler.TryGetValue(m.HandlerFullyQualifiedName, out interceptors))
+                {
+                    var hSimple = m.HandlerFullyQualifiedName;
+                    var hd = hSimple.LastIndexOf('.');
+                    if (hd >= 0) hSimple = hSimple.Substring(hd + 1);
+                    interceptorsByHandler.TryGetValue(hSimple, out interceptors);
+                    if (interceptors.IsDefault) interceptors = ImmutableArray<string>.Empty;
+                }
+
+                sb.AppendLine($"            context.AddUnaryMethod(");
+                sb.AppendLine($"                {sanitized}_GrpcMethods.{m.MethodName},");
+                sb.AppendLine("                new List<object>(),");
+                if (interceptors.IsDefaultOrEmpty)
+                {
+                    sb.AppendLine($"                static ({sanitized}_GrpcService service, {req} request, ServerCallContext ctx) => service.{m.MethodName}(request, ctx));");
+                }
+                else
+                {
+                    sb.AppendLine($"                static ({sanitized}_GrpcService service, {req} request, ServerCallContext ctx) =>");
+                    sb.AppendLine("                {");
+                    sb.AppendLine($"                    UnaryServerMethod<{req}, {res}> next = (r, c) => service.{m.MethodName}(r, c);");
+                    for (var ii = interceptors.Length - 1; ii >= 0; ii--)
+                    {
+                        var ic = interceptors[ii];
+                        sb.AppendLine($"                    {{");
+                        sb.AppendLine($"                        var __prev = next;");
+                        sb.AppendLine($"                        var __ic = ctx.GetHttpContext().RequestServices.GetRequiredService<{ic}>();");
+                        sb.AppendLine($"                        next = (r, c) => __ic.UnaryServerHandler(r, c, __prev);");
+                        sb.AppendLine($"                    }}");
+                    }
+                    sb.AppendLine("                    return next(request, ctx);");
+                    sb.AppendLine("                });");
+                }
+            }
+            sb.AppendLine("        }");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+        }
+
+        // DI registration helper for providers
+        sb.AppendLine("    public static class GeneratedGrpcServiceMethodProviders");
+        sb.AppendLine("    {");
+        sb.AppendLine("        public static IServiceCollection AddGeneratedGrpcServiceMethodProviders(this IServiceCollection services)");
+        sb.AppendLine("        {");
+        foreach (var g in groups)
+        {
+            var sanitized = g.Key.Replace(".", "_");
+            sb.AppendLine($"            services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceMethodProvider<{sanitized}_GrpcService>, {sanitized}_ServiceMethodProvider>());");
+        }
+        sb.AppendLine("            return services;");
+        sb.AppendLine("        }");
+        sb.AppendLine("    }");
+
+        sb.AppendLine("}");
+        context.AddSource("GeneratedGrpcServices.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+        EmitMetadataBinders(context, endpoints, typeConfigs, compilation);
+    }
+
+    /// <summary>
+    /// Emits no-op or real Apply_* helpers that copy FromMetadata values onto the request DTO.
+    /// </summary>
+
+
+
+
+    private static string? TryReadPropertyName(ExpressionSyntax firstArg)
+    {
+        if (firstArg is SimpleLambdaExpressionSyntax { Body: MemberAccessExpressionSyntax member })
+            return member.Name.Identifier.Text;
+        if (firstArg is ParenthesizedLambdaExpressionSyntax { Body: MemberAccessExpressionSyntax member2 })
+            return member2.Name.Identifier.Text;
+        if (firstArg is LiteralExpressionSyntax nameLit && nameLit.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralExpression))
+            return nameLit.Token.ValueText;
+        return null;
+    }
+
+    private static List<(string RequestTypeName, string Prop, string Source, string Key, string ClrHint)> DiscoverEndpointBindings(Compilation compilation)
+    {
+        var result = new List<(string, string, string, string, string)>();
+
+        void Visit(INamespaceSymbol ns)
+        {
+            if (ns.Name is "System" or "Microsoft") return;
+            foreach (var type in ns.GetTypeMembers()) VisitType(type);
+            foreach (var child in ns.GetNamespaceMembers()) Visit(child);
+        }
+
+        void VisitType(INamedTypeSymbol type)
+        {
+            if (type.TypeKind == TypeKind.Class && !type.IsAbstract)
+            {
+                foreach (var i in type.AllInterfaces)
+                {
+                    if (i.Name != "IGrpcEndpointConfiguration" || i.TypeArguments.Length != 1)
+                        continue;
+                    // Parse Request<TRequest>(req => req.Property(x => x.Foo, p => p.FromHeader("k")))
+                    foreach (var syntaxRef in type.DeclaringSyntaxReferences)
+                    {
+                        if (syntaxRef.GetSyntax() is not TypeDeclarationSyntax typeDecl)
+                            continue;
+                        var model = compilation.GetSemanticModel(syntaxRef.SyntaxTree);
+                        foreach (var inv in typeDecl.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                        {
+                            var methodName = inv.Expression switch
+                            {
+                                MemberAccessExpressionSyntax ma => ma.Name is GenericNameSyntax gn ? gn.Identifier.Text : ma.Name.Identifier.Text,
+                                _ => null
+                            };
+                            // Look for FromHeader / FromPath invocations; walk up to Property
+                            if (methodName is not "FromHeader")
+                                continue;
+
+                            var source = "Header";
+                            string? key = null;
+                            if (inv.ArgumentList.Arguments.Count >= 1)
+                            {
+                                var a0 = inv.ArgumentList.Arguments[0].Expression;
+                                if (a0 is LiteralExpressionSyntax lit && lit.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralExpression))
+                                    key = lit.Token.ValueText;
+                            }
+
+                            // Find enclosing Property(x => x.Name, ...) call
+                            var propInv = inv.Ancestors().OfType<InvocationExpressionSyntax>().FirstOrDefault(a =>
+                            {
+                                var n = a.Expression switch
+                                {
+                                    MemberAccessExpressionSyntax ma => ma.Name.Identifier.Text,
+                                    _ => null
+                                };
+                                return n == "Property" && a.ArgumentList.Arguments.Count >= 1;
+                            });
+                            if (propInv is null) continue;
+                            var propName = TryReadPropertyName(propInv.ArgumentList.Arguments[0].Expression);
+                            if (propName is null) continue;
+
+                            // Request type from Request<TRequest>
+                            string requestType = "object";
+                            string clrHint = "string";
+                            var requestInv = propInv.Ancestors().OfType<InvocationExpressionSyntax>().FirstOrDefault(a =>
+                            {
+                                if (a.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax gn })
+                                    return gn.Identifier.Text == "Request";
+                                return false;
+                            });
+                            if (requestInv?.Expression is MemberAccessExpressionSyntax { Name: GenericNameSyntax reqGn } &&
+                                reqGn.TypeArgumentList.Arguments.Count == 1)
+                            {
+                                var ti = model.GetTypeInfo(reqGn.TypeArgumentList.Arguments[0]);
+                                if (ti.Type is not null)
+                                {
+                                    requestType = ti.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                                    var propSym = ti.Type.GetMembers(propName).OfType<IPropertySymbol>().FirstOrDefault();
+                                    if (propSym is not null)
+                                    {
+                                        var pt = propSym.Type;
+                                        if (pt is INamedTypeSymbol nn && nn.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+                                            pt = nn.TypeArguments[0];
+                                        clrHint = pt.ToDisplayString();
+                                        if (clrHint.StartsWith("global::"))
+                                            clrHint = clrHint.Substring("global::".Length);
+                                    }
+                                }
+                            }
+
+                            if (string.IsNullOrEmpty(key))
+                                key = propName;
+
+                            result.Add((requestType, propName, source, key ?? "", clrHint));
+                        }
+                    }
+                }
+            }
+            foreach (var nested in type.GetTypeMembers())
+                VisitType(nested);
+        }
+
+        Visit(compilation.GlobalNamespace);
+        return result;
+    }
+
+    private static List<string> DiscoverInterceptorTypes(Compilation compilation)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Visit(INamespaceSymbol ns)
+        {
+            if (ns.Name is "System" or "Microsoft")
+                return;
+            foreach (var type in ns.GetTypeMembers())
+                VisitType(type);
+            foreach (var child in ns.GetNamespaceMembers())
+                Visit(child);
+        }
+
+        void VisitType(INamedTypeSymbol type)
+        {
+            if (type.TypeKind == TypeKind.Class && !type.IsAbstract &&
+                type.AllInterfaces.Any(i => i.Name == "IGrpcEndpointConfiguration"))
+            {
+                foreach (var syntaxRef in type.DeclaringSyntaxReferences)
+                {
+                    if (syntaxRef.GetSyntax() is not TypeDeclarationSyntax typeDecl)
+                        continue;
+                    var model = compilation.GetSemanticModel(syntaxRef.SyntaxTree);
+                    foreach (var inv in typeDecl.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                    {
+                        if (inv.Expression is not MemberAccessExpressionSyntax ma)
+                            continue;
+                        if (ma.Name is not GenericNameSyntax gns || gns.Identifier.Text != "AddInterceptor")
+                            continue;
+                        if (gns.TypeArgumentList.Arguments.Count != 1)
+                            continue;
+                        var typeInfo = model.GetTypeInfo(gns.TypeArgumentList.Arguments[0]);
+                        var sym = typeInfo.Type as ITypeSymbol;
+                        if (sym is null)
+                            continue;
+                        var fqn = sym.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                        if (seen.Add(fqn))
+                            result.Add(fqn);
+                    }
+                }
+            }
+            foreach (var nested in type.GetTypeMembers())
+                VisitType(nested);
+        }
+
+        Visit(compilation.GlobalNamespace);
+        return result;
+    }
+
+
+    private static List<string> CollectAllInterceptorTypes(ImmutableArray<TypeConfigModel> typeConfigs)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var list = new List<string>();
+        foreach (var c in typeConfigs)
+        {
+            if (c.Interceptors.IsDefaultOrEmpty) continue;
+            foreach (var i in c.Interceptors)
+            {
+                if (seen.Add(i))
+                    list.Add(i);
+            }
+        }
+        return list;
+    }
+
+    private static void EmitBindingAssign(StringBuilder sb, string prop, string source, string key, string clrHint)
+    {
+        // Header-only binding (Path/Query removed)
+        var clr = (clrHint ?? "string").Trim();
+        if (clr.StartsWith("global::", StringComparison.Ordinal))
+            clr = clr.Substring("global::".Length);
+        var isNullable = clr.EndsWith("?", StringComparison.Ordinal);
+        if (isNullable)
+            clr = clr.Substring(0, clr.Length - 1);
+
+        void Block(string getExpr, string assignExpr)
+        {
+            sb.AppendLine("            {");
+            sb.AppendLine($"                var __mv = {getExpr};");
+            sb.AppendLine("                if (__mv is not null)");
+            sb.AppendLine($"                    request.{prop} = {assignExpr};");
+            sb.AppendLine("            }");
+        }
+
+        var simple = clr;
+        var lastDot = simple.LastIndexOf('.');
+        if (lastDot >= 0)
+            simple = simple.Substring(lastDot + 1);
+
+        switch (simple)
+        {
+            case "String":
+            case "string":
+                Block($"GrpcMetadataBinder.GetString(context, \"{key}\")", "__mv");
+                break;
+            case "Int32":
+            case "int":
+                Block($"GrpcMetadataBinder.GetInt32(context, \"{key}\")", isNullable ? "__mv" : "__mv.Value");
+                break;
+            case "Int64":
+            case "long":
+                Block($"GrpcMetadataBinder.GetInt64(context, \"{key}\")", isNullable ? "__mv" : "__mv.Value");
+                break;
+            case "Boolean":
+            case "bool":
+                Block($"GrpcMetadataBinder.GetBoolean(context, \"{key}\")", isNullable ? "__mv" : "__mv.Value");
+                break;
+            case "Guid":
+                Block($"GrpcMetadataBinder.GetGuid(context, \"{key}\")", isNullable ? "__mv" : "__mv.Value");
+                break;
+            default:
+                sb.AppendLine("            {");
+                sb.AppendLine($"                var __mv = GrpcMetadataBinder.GetString(context, \"{key}\");");
+                sb.AppendLine("                if (__mv is not null)");
+                sb.AppendLine("                {");
+                sb.AppendLine($"                    if (typeof({clr}).IsEnum)");
+                sb.AppendLine("                    {");
+                sb.AppendLine($"                        if (System.Enum.TryParse(typeof({clr}), __mv, true, out var __ev) && __ev is not null)");
+                sb.AppendLine($"                            request.{prop} = ({clr})__ev;");
+                sb.AppendLine("                    }");
+                sb.AppendLine("                    else");
+                sb.AppendLine("                    {");
+                sb.AppendLine($"                        request.{prop} = ({clr})System.Convert.ChangeType(__mv, typeof({clr}), System.Globalization.CultureInfo.InvariantCulture);");
+                sb.AppendLine("                    }");
+                sb.AppendLine("                }");
+                sb.AppendLine("            }");
+                break;
+        }
+    }
+
+
+    private static void EmitMetadataBinders(
+        SourceProductionContext context,
+        ImmutableArray<GrpcEndpointModel> endpoints,
+        ImmutableArray<TypeConfigModel> typeConfigs,
+        Compilation compilation)
+    {
+        var byTarget = new Dictionary<string, TypeConfigModel>(StringComparer.Ordinal);
+        foreach (var c in typeConfigs)
+        {
+            if (string.IsNullOrEmpty(c.TargetTypeName) || c.TargetTypeName == "IOpenProtoTypeConfiguration")
+                continue;
+            byTarget[c.TargetTypeName] = c;
+            var simple = c.TargetTypeName;
+            var idx = simple.LastIndexOf('.');
+            if (idx >= 0) simple = simple.Substring(idx + 1);
+            if (!byTarget.ContainsKey(simple))
+                byTarget[simple] = c;
+        }
+
+        // Merge FromHeader / FromPath bindings from IGrpcEndpointConfiguration
+        foreach (var group in DiscoverEndpointBindings(compilation).GroupBy(x => x.RequestTypeName))
+        {
+            var bindings = group.Select(x => (x.Prop, x.Source, x.Key, x.ClrHint)).ToImmutableArray();
+            var existing = byTarget.TryGetValue(group.Key, out var prev) ? prev : null;
+            var fields = existing?.Fields ?? ImmutableArray<(string, int)>.Empty;
+            var merged = new TypeConfigModel(
+                existing?.ConfigClassName ?? "EndpointBinding",
+                group.Key,
+                fields,
+                bindings);
+            byTarget[group.Key] = merged;
+            var simple = group.Key;
+            var dot = simple.LastIndexOf('.');
+            if (dot >= 0) simple = simple.Substring(dot + 1);
+            byTarget[simple] = merged;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var sb = new StringBuilder();
+        sb.AppendLine("// <auto-generated/>");
+        sb.AppendLine("#nullable enable");
+        sb.AppendLine("using Grpc.Core;");
+        sb.AppendLine();
+        sb.AppendLine("namespace KetPsi.Endpoints.Grpc");
+        sb.AppendLine("{");
+        sb.AppendLine("    /// <summary>Generated metadata binders for FromMetadata properties.</summary>");
+        sb.AppendLine("    internal static class GrpcMetadataBinderGenerated");
+        sb.AppendLine("    {");
+
+        foreach (var ep in endpoints)
+        {
+            var reqMsg = ep.RequestMessageName;
+            if (string.IsNullOrEmpty(reqMsg) || !seen.Add(reqMsg))
+                continue;
+            var reqType = ep.RequestTypeName;
+            TypeConfigModel? cfg = null;
+            if (!string.IsNullOrEmpty(reqType))
+            {
+                byTarget.TryGetValue(reqType, out cfg);
+                if (cfg is null)
+                {
+                    var simple = reqType;
+                    var dot = simple.LastIndexOf('.');
+                    if (dot >= 0) simple = simple.Substring(dot + 1);
+                    byTarget.TryGetValue(simple, out cfg);
+                }
+            }
+
+            var safe = SanitizeName(reqMsg);
+            sb.AppendLine($"        public static void Apply_{safe}({reqType} request, ServerCallContext context)");
+            sb.AppendLine("        {");
+                        if (cfg is not null && !cfg.MetadataBindings.IsDefaultOrEmpty)
+            {
+                foreach (var (prop, source, key, clr) in cfg.MetadataBindings)
+                {
+                    EmitBindingAssign(sb, prop, source, key, clr);
+                }
+            }
+
+            sb.AppendLine("        }");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("    }");
+        sb.AppendLine("}");
+        context.AddSource("GeneratedGrpcMetadataBinders.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
+    }
+
+    private static string UnwrapTaskName(string typeName)
+    {
+        foreach (var prefix in new[]
+                 {
+                     "global::System.Threading.Tasks.Task<",
+                     "System.Threading.Tasks.Task<",
+                     "global::System.Threading.Tasks.ValueTask<",
+                     "System.Threading.Tasks.ValueTask<"
+                 })
+        {
+            var idx = typeName.IndexOf(prefix, System.StringComparison.Ordinal);
+            if (idx >= 0)
+            {
+                var start = idx + prefix.Length;
+                var end = typeName.LastIndexOf('>');
+                if (end > start)
+                    return typeName.Substring(start, end - start).Trim();
+            }
+        }
+        return typeName;
+    }
+
+    private static string SanitizeName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return "Message";
+        var chars = name.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (!char.IsLetterOrDigit(chars[i]))
+                chars[i] = '_';
+        }
+        return new string(chars);
+    }
+
+    private sealed class ServerGlobalTypeVisitor : SymbolVisitor
+    {
+        public List<TypeConfigModel> TypeConfigs { get; } = new();
+        private readonly Compilation _compilation;
+
+        private readonly SymbolDisplayFormat _fqnFormat = new(
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters);
+
+        public ServerGlobalTypeVisitor(Compilation compilation) => _compilation = compilation;
+
+        public override void VisitNamespace(INamespaceSymbol symbol)
+        {
+            if (symbol.Name is "System" or "Microsoft")
+                return;
+
+            foreach (var member in symbol.GetMembers())
+                member.Accept(this);
+        }
+
+        public override void VisitNamedType(INamedTypeSymbol symbol)
+        {
+            if (symbol.TypeKind == TypeKind.Class && !symbol.IsAbstract)
+            {
+                foreach (var i in symbol.AllInterfaces)
+                {
+                    if (i.Name == "IGrpcEndpointConfiguration" && i.TypeArguments.Length == 1)
+                    {
+                        var interceptors = ExtractInterceptors(symbol);
+                        TypeConfigs.Add(new TypeConfigModel(
+                            symbol.ToDisplayString(_fqnFormat),
+                            i.TypeArguments[0].ToDisplayString(_fqnFormat),
+                            interceptors: interceptors));
+                        // continue — may also implement other interfaces
+                    }
+
+                    if (i.Name.Contains("IProtoTypeConfiguration") && i.TypeArguments.Length > 0)
+                    {
+                        var (fields, metadata) = ExtractConfigMaps(symbol, i.TypeArguments[0]);
+                        TypeConfigs.Add(new TypeConfigModel(
+                            symbol.ToDisplayString(_fqnFormat),
+                            i.TypeArguments[0].ToDisplayString(_fqnFormat),
+                            fields,
+                            metadata));
+                        break;
+                    }
+
+                    if (i.Name.Contains("IOpenProtoTypeConfiguration"))
+                    {
+                        TypeConfigs.Add(new TypeConfigModel(
+                            symbol.ToDisplayString(_fqnFormat),
+                            "IOpenProtoTypeConfiguration"));
+                        break;
+                    }
+                }
+            }
+
+            foreach (var nested in symbol.GetTypeMembers())
+                nested.Accept(this);
+        }
+
+        /// <summary>
+        /// Reads <c>builder.Property(x => x.Name, 1)</c> / <c>Property("Name", 1)</c> from Configure methods.
+        /// Used for compile-time /proto schema without requiring [ProtoMember].
+        /// </summary>
+
+        private ImmutableArray<string> ExtractInterceptors(INamedTypeSymbol configClass)
+        {
+            var list = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var syntaxRef in configClass.DeclaringSyntaxReferences)
+            {
+                if (syntaxRef.GetSyntax() is not TypeDeclarationSyntax typeDecl)
+                    continue;
+                var model = _compilation.GetSemanticModel(syntaxRef.SyntaxTree);
+                foreach (var inv in typeDecl.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    if (inv.Expression is not MemberAccessExpressionSyntax ma)
+                        continue;
+                    if (ma.Name is not GenericNameSyntax gns || gns.Identifier.Text != "AddInterceptor")
+                        continue;
+                    if (gns.TypeArgumentList.Arguments.Count != 1)
+                        continue;
+                    var ti = model.GetTypeInfo(gns.TypeArgumentList.Arguments[0]);
+                    if (ti.Type is null) continue;
+                    var fqn = ti.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                    if (seen.Add(fqn))
+                        list.Add(fqn);
+                }
+            }
+            return list.ToImmutableArray();
+        }
+
+        private static (ImmutableArray<(string Name, int Number)> Fields, ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> Metadata) ExtractConfigMaps(INamedTypeSymbol configClass, ITypeSymbol? targetType)
+        {
+            var fields = new List<(string Name, int Number)>();
+            var metadata = new List<(string Name, string Source, string Key, string ClrTypeHint)>();
+
+            foreach (var syntaxRef in configClass.DeclaringSyntaxReferences)
+            {
+                if (syntaxRef.GetSyntax() is not TypeDeclarationSyntax typeDecl)
+                    continue;
+
+                foreach (var invocation in typeDecl.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    var methodName = invocation.Expression switch
+                    {
+                        MemberAccessExpressionSyntax ma => ma.Name.Identifier.Text,
+                        IdentifierNameSyntax id => id.Identifier.Text,
+                        _ => null
+                    };
+
+                    if (methodName is null || invocation.ArgumentList.Arguments.Count < 2)
+                        continue;
+
+                    var propName = TryReadPropertyName(invocation.ArgumentList.Arguments[0].Expression);
+                    if (propName is null)
+                        continue;
+
+                    if (methodName == "Property")
+                    {
+                        var numberArg = invocation.ArgumentList.Arguments[1].Expression;
+                        if (numberArg is not LiteralExpressionSyntax lit || !lit.Token.ValueText.All(char.IsDigit))
+                            continue;
+                        if (!int.TryParse(lit.Token.ValueText, out var number))
+                            continue;
+                        fields.Add((propName, number));
+                    }
+
+                }
+            }
+
+            return (fields.ToImmutableArray(), metadata.ToImmutableArray());
+        }
+
+        private static string? TryReadPropertyName(ExpressionSyntax firstArg)
+        {
+            // Property(x => x.Foo, n) / FromMetadata(x => x.Foo, "key")
+            if (firstArg is SimpleLambdaExpressionSyntax { Body: MemberAccessExpressionSyntax member })
+                return member.Name.Identifier.Text;
+            if (firstArg is ParenthesizedLambdaExpressionSyntax { Body: MemberAccessExpressionSyntax member2 })
+                return member2.Name.Identifier.Text;
+            // Property("Foo", n)
+            if (firstArg is LiteralExpressionSyntax nameLit && nameLit.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralExpression))
+                return nameLit.Token.ValueText;
+            return null;
+        }
+}
+}
