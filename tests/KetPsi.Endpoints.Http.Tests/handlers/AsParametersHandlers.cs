@@ -15,7 +15,7 @@ public record OrderFilter(
     int? Page = 1,
     int? Size = 50);
 
-public class GetOrdersWithRecordFilterHandler 
+public class GetOrdersWithRecordFilterHandler : IEndpoint
 {
     public Task<IResult> ExecuteAsync(OrderFilter filter, CancellationToken ct)
     {
@@ -123,7 +123,7 @@ public record CustomerFilter(
     string? City, string? Country, string? PostalCode = null,
     bool? Active = true);
 
-public class SearchCustomersComplexHandler 
+public class SearchCustomersComplexHandler : IEndpoint
 {
     public Task<IResult> ExecuteAsync(CustomerFilter filter, CancellationToken ct)
     {

@@ -89,6 +89,25 @@ public class DeleteUserHandler : IEndpoint
 }
 
 // -------------------------------------------------------
+// 5b. PATCH simple
+// -------------------------------------------------------
+public record PatchUserRequest(string? Email, string? FirstName);
+
+public class PatchUserHandler : IEndpoint
+{
+    public Task<IResult> ExecuteAsync(int id, [FromBody] PatchUserRequest request, CancellationToken ct)
+    {
+        return Task.FromResult(Results.Ok(new
+        {
+            id,
+            request.Email,
+            request.FirstName,
+            Method = "PATCH"
+        }));
+    }
+}
+
+// -------------------------------------------------------
 // 6. DELETE with body (bulk)
 // -------------------------------------------------------
 public record BulkDeleteRequest(int[] Ids, string? Reason = null);

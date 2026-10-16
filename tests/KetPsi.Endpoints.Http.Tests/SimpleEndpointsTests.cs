@@ -86,6 +86,25 @@ public class SimpleEndpointsTests : IClassFixture<WebApplicationFactory<Program>
     }
 
     [Fact]
+    public async Task PatchUser_ReturnsOk()
+    {
+        var payload = new { email = "patched@example.com", firstName = "Patched" };
+        var request = new HttpRequestMessage(HttpMethod.Patch, "/users/77")
+        {
+            Content = JsonContent.Create(payload)
+        };
+
+        var response = await _client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("id").GetInt32().Should().Be(77);
+        body.GetProperty("email").GetString().Should().Be("patched@example.com");
+        body.GetProperty("firstName").GetString().Should().Be("Patched");
+        body.GetProperty("method").GetString().Should().Be("PATCH");
+    }
+
+    [Fact]
     public async Task BulkDeleteUsers_WithBody()
     {
         var payload = new { ids = new[] { 1, 2, 3 }, reason = "GDPR" };
