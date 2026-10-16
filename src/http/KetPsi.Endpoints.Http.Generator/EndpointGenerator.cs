@@ -43,6 +43,44 @@ public partial class EndpointGenerator : IIncrementalGenerator
         return node is ClassDeclarationSyntax { BaseList.Types.Count: > 0 };
     }
 
+    static bool CreateConfigSyntaxProviderPredicate(SyntaxNode node, CancellationToken cancellationToken)
+    {
+        return node is ClassDeclarationSyntax { BaseList.Types.Count: > 0 };
+    }
+
+    static ConfigExtractionResult? CreateConfigSyntaxProviderTransform(GeneratorSyntaxContext ctx, CancellationToken cancellationToken)
+    {
+        var classDecl = (ClassDeclarationSyntax)ctx.Node;
+        if (ctx.SemanticModel.GetDeclaredSymbol(classDecl, cancellationToken) is not INamedTypeSymbol classSymbol)
+            return null;
+
+        if (classSymbol.IsAbstract)
+            return null;
+
+        var configInterface = classSymbol.AllInterfaces.FirstOrDefault(i =>
+            i.Name == "IHttpEndpointConfiguration" &&
+            i.TypeArguments.Length == 1);
+
+        if (configInterface is null)
+            return null;
+
+        var handlerType = configInterface.TypeArguments[0];
+        var handlerDisplayName = handlerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+        var executeMethod = handlerType.GetMembers("ExecuteAsync")
+            .OfType<IMethodSymbol>()
+            .FirstOrDefault(m => m.DeclaredAccessibility == Accessibility.Public);
+
+        // Even without ExecuteAsync we still capture the raw config shape; parameter names
+        // are resolved later against the real ExecuteAsync signature.
+        var paramConfigs = ExtractExternalParameterConfigurationsFromClass(
+            classDecl,
+            ctx.SemanticModel,
+            executeMethod);
+
+        return new ConfigExtractionResult(handlerDisplayName, paramConfigs);
+    }
+
     static HandlerGenerationResult? CreateHandlerSyntaxProviderTransform(GeneratorSyntaxContext ctx, CancellationToken cancellationToken)
     {
         var classDecl = (ClassDeclarationSyntax)ctx.Node;
@@ -147,8 +185,16 @@ public partial class EndpointGenerator : IIncrementalGenerator
             .Where(x => x != null)
             .Collect();
 
+        // Configuration discovery runs once via SyntaxProvider (not per Map* call site).
+        var configProvider = context.SyntaxProvider.CreateSyntaxProvider(
+            predicate: CreateConfigSyntaxProviderPredicate,
+            transform: CreateConfigSyntaxProviderTransform)
+            .Where(x => x != null)
+            .Collect();
+
         var provider = endpointProvider
             .Combine(handlerProvider)
+            .Combine(configProvider)
             .Combine(context.CompilationProvider)
             .Combine(context.AnalyzerConfigOptionsProvider);
 
@@ -156,8 +202,10 @@ public partial class EndpointGenerator : IIncrementalGenerator
         {
             try
             {
-                var endpoints = source.Left.Left.Left;
-                var handlers = source.Left.Left.Right;
+                var endpoints = source.Left.Left.Left.Left;
+                var handlers = source.Left.Left.Left.Right;
+                var configs = source.Left.Left.Right;
+                var compilation = source.Left.Right;
 
                 // 1. Report diagnostics from IEndpoint class declarations (e.g. KP003)
                 if (!handlers.IsDefaultOrEmpty)
@@ -184,6 +232,59 @@ public partial class EndpointGenerator : IIncrementalGenerator
                         .Select(r => r!.Endpoint)
                         .Distinct()
                         .ToList();
+
+                // Apply external IHttpEndpointConfiguration configs once (collected via SyntaxProvider).
+                var configsByHandler = new Dictionary<string, Dictionary<string, ExternalParameterConfig>>(StringComparer.Ordinal);
+                if (!configs.IsDefaultOrEmpty)
+                {
+                    foreach (var cfg in configs)
+                    {
+                        if (cfg is null) continue;
+                        if (!configsByHandler.TryGetValue(cfg.HandlerTypeName, out var existing))
+                        {
+                            configsByHandler[cfg.HandlerTypeName] = cfg.ParameterConfigs;
+                        }
+                        else
+                        {
+                            foreach (var kv in cfg.ParameterConfigs)
+                            {
+                                if (!existing.TryGetValue(kv.Key, out var merged))
+                                {
+                                    existing[kv.Key] = kv.Value;
+                                }
+                                else
+                                {
+                                    merged.IsAsParameters |= kv.Value.IsAsParameters;
+                                    foreach (var a in kv.Value.DirectAttributes)
+                                    {
+                                        if (!merged.DirectAttributes.Contains(a))
+                                            merged.DirectAttributes.Add(a);
+                                    }
+                                    foreach (var prop in kv.Value.PropertyAttributes)
+                                    {
+                                        if (!merged.PropertyAttributes.TryGetValue(prop.Key, out var list))
+                                        {
+                                            merged.PropertyAttributes[prop.Key] = new List<string>(prop.Value);
+                                        }
+                                        else
+                                        {
+                                            foreach (var a in prop.Value)
+                                            {
+                                                if (!list.Contains(a)) list.Add(a);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                foreach (var ep in validEndpoints)
+                {
+                    if (ep is null) continue;
+                    ApplyExternalParameterConfigurations(ep, configsByHandler, compilation);
+                }
 
                 // 3. Collect all handlers to generate HttpEndpointBuilder extensions for
                 var buildersByType = new Dictionary<string, HandlerBuilderToGenerate>(StringComparer.Ordinal);
@@ -341,12 +442,10 @@ public partial class EndpointGenerator : IIncrementalGenerator
             }
 
             var handlerDisplayName = handlerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-            var handlerShortName = Sanitize(handlerType.Name);
             var handlerAccessibility = GetEffectiveAccessibility(handlerType);
 
-            // Extract external configurations from IHttpEndpointConfiguration<THandler>
-            var externalParamConfigs = ExtractExternalParameterConfigurations(handlerType, executeMethod, ctx.SemanticModel.Compilation);
-
+            // External IHttpEndpointConfiguration is applied once in RegisterSourceOutput
+            // (configs are collected via SyntaxProvider). Here we only capture inline attributes.
             var parameters = new List<ParameterToGenerate>();
 
             foreach (var p in executeMethod.Parameters)
@@ -359,39 +458,6 @@ public partial class EndpointGenerator : IIncrementalGenerator
                 var paramTypeDisplay = p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
                 var isNullable = p.Type.NullableAnnotation == NullableAnnotation.Annotated;
                 var paramAccessibility = GetEffectiveAccessibility(p.Type);
-
-                if (externalParamConfigs.TryGetValue(p.Name, out var extConfig))
-                {
-                    if (extConfig.IsAsParameters && extConfig.PropertyAttributes.Count > 0 && p.Type is INamedTypeSymbol namedParamType)
-                    {
-                        var surrogateInfo = BuildAsParametersSurrogate(handlerShortName, p.Name, namedParamType, extConfig.PropertyAttributes);
-                        if (surrogateInfo != null)
-                        {
-                            var surrogateAttrs = new List<string>(inlineAttrs);
-                            if (!surrogateAttrs.Any(a => a.Contains("AsParameters")))
-                            {
-                                surrogateAttrs.Add("Microsoft.AspNetCore.Http.AsParameters");
-                            }
-
-                            parameters.Add(new ParameterToGenerate(
-                                paramTypeDisplay,
-                                p.Name,
-                                surrogateAttrs,
-                                isNullable,
-                                paramAccessibility,
-                                surrogateInfo));
-                            continue;
-                        }
-                    }
-
-                    foreach (var attr in extConfig.DirectAttributes)
-                    {
-                        if (!inlineAttrs.Contains(attr))
-                        {
-                            inlineAttrs.Add(attr);
-                        }
-                    }
-                }
 
                 parameters.Add(new ParameterToGenerate(
                     paramTypeDisplay,
@@ -438,11 +504,19 @@ public partial class EndpointGenerator : IIncrementalGenerator
 
     #region IHttpEndpointConfiguration & AsParameters Surrogate Analysis
 
-    private sealed class ExternalParameterConfig
+    internal sealed class ExternalParameterConfig
     {
         public bool IsAsParameters { get; set; }
         public List<string> DirectAttributes { get; } = new();
         public Dictionary<string, List<string>> PropertyAttributes { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal sealed class ConfigExtractionResult(
+        string handlerTypeName,
+        Dictionary<string, ExternalParameterConfig> parameterConfigs)
+    {
+        public string HandlerTypeName { get; } = handlerTypeName;
+        public Dictionary<string, ExternalParameterConfig> ParameterConfigs { get; } = parameterConfigs;
     }
 
     private static string GetEffectiveAccessibility(ITypeSymbol? typeSymbol)
@@ -486,110 +560,239 @@ public partial class EndpointGenerator : IIncrementalGenerator
         return "public";
     }
 
-    private static Dictionary<string, ExternalParameterConfig> ExtractExternalParameterConfigurations(
-        ITypeSymbol handlerType,
-        IMethodSymbol executeMethod,
-        Compilation compilation)
+    /// <summary>
+    /// Extracts parameter configuration from a single IHttpEndpointConfiguration class declaration.
+    /// Called once per config class via SyntaxProvider (not once per Map* call site).
+    /// When executeMethod is available, maps PascalCase builder methods to actual parameter names;
+    /// otherwise keeps the PascalCase keys for later resolution.
+    /// </summary>
+    private static Dictionary<string, ExternalParameterConfig> ExtractExternalParameterConfigurationsFromClass(
+        ClassDeclarationSyntax classDecl,
+        SemanticModel semanticModel,
+        IMethodSymbol? executeMethod)
     {
         var result = new Dictionary<string, ExternalParameterConfig>(StringComparer.Ordinal);
 
-        var pascalToParamName = executeMethod.Parameters.ToDictionary(
-            p => ToPascalCase(p.Name),
-            p => p.Name,
-            StringComparer.Ordinal);
-
-        foreach (var tree in compilation.SyntaxTrees)
+        Dictionary<string, string>? pascalToParamName = null;
+        if (executeMethod is not null)
         {
-            var semanticModel = compilation.GetSemanticModel(tree);
-            var classDeclarations = tree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>();
+            pascalToParamName = executeMethod.Parameters.ToDictionary(
+                p => ToPascalCase(p.Name),
+                p => p.Name,
+                StringComparer.Ordinal);
+        }
 
-            foreach (var classDecl in classDeclarations)
+        var configureMethodSyntax = classDecl.Members
+            .OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault(m => m.Identifier.ValueText == "Configure" && m.ParameterList.Parameters.Count == 1);
+
+        if (configureMethodSyntax is null)
+            return result;
+
+        var builderParamName = configureMethodSyntax.ParameterList.Parameters[0].Identifier.ValueText;
+
+        foreach (var invocation in configureMethodSyntax.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
+                continue;
+
+            var methodName = memberAccess.Name.Identifier.ValueText;
+
+            var rootParamPascal = FindTargetParameterMethodName(memberAccess.Expression, builderParamName);
+            if (rootParamPascal is null)
+                continue;
+
+            string actualParamName;
+            if (pascalToParamName is not null)
             {
-                if (semanticModel.GetDeclaredSymbol(classDecl) is not INamedTypeSymbol classSymbol)
+                if (!pascalToParamName.TryGetValue(rootParamPascal, out actualParamName!))
                     continue;
+            }
+            else
+            {
+                actualParamName = rootParamPascal;
+            }
 
-                var implementsConfig = classSymbol.AllInterfaces.Any(i =>
-                    i.Name == "IHttpEndpointConfiguration" &&
-                    i.TypeArguments.Length == 1 &&
-                    SymbolEqualityComparer.Default.Equals(i.TypeArguments[0], handlerType));
+            if (!result.TryGetValue(actualParamName, out var paramConfig))
+            {
+                paramConfig = new ExternalParameterConfig();
+                result[actualParamName] = paramConfig;
+            }
 
-                if (!implementsConfig)
-                    continue;
-
-                var configureMethodSyntax = classDecl.Members
-                    .OfType<MethodDeclarationSyntax>()
-                    .FirstOrDefault(m => m.Identifier.ValueText == "Configure" && m.ParameterList.Parameters.Count == 1);
-
-                if (configureMethodSyntax == null)
-                    continue;
-
-                var builderParamName = configureMethodSyntax.ParameterList.Parameters[0].Identifier.ValueText;
-
-                foreach (var invocation in configureMethodSyntax.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            if (methodName == "AsParameters")
+            {
+                paramConfig.IsAsParameters = true;
+                if (!paramConfig.DirectAttributes.Contains("Microsoft.AspNetCore.Http.AsParameters"))
                 {
-                    if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
-                        continue;
+                    paramConfig.DirectAttributes.Add("Microsoft.AspNetCore.Http.AsParameters");
+                }
+            }
+            else if (methodName == "Property" && invocation.ArgumentList.Arguments.Count == 2)
+            {
+                paramConfig.IsAsParameters = true;
+                var propSelectorExpr = invocation.ArgumentList.Arguments[0].Expression;
+                var propConfigureExpr = invocation.ArgumentList.Arguments[1].Expression;
 
-                    var methodName = memberAccess.Name.Identifier.ValueText;
-
-                    var rootParamPascal = FindTargetParameterMethodName(memberAccess.Expression, builderParamName);
-                    if (rootParamPascal == null || !pascalToParamName.TryGetValue(rootParamPascal, out var actualParamName))
-                        continue;
-
-                    if (!result.TryGetValue(actualParamName, out var paramConfig))
+                var propName = ExtractPropertyNameFromSelector(propSelectorExpr);
+                if (propName != null)
+                {
+                    var propAttrs = ExtractAttributesFromNestedLambda(propConfigureExpr);
+                    if (propAttrs.Count > 0)
                     {
-                        paramConfig = new ExternalParameterConfig();
-                        result[actualParamName] = paramConfig;
-                    }
-
-                    if (methodName == "AsParameters")
-                    {
-                        paramConfig.IsAsParameters = true;
-                        if (!paramConfig.DirectAttributes.Contains("Microsoft.AspNetCore.Http.AsParameters"))
+                        if (!paramConfig.PropertyAttributes.TryGetValue(propName, out var list))
                         {
-                            paramConfig.DirectAttributes.Add("Microsoft.AspNetCore.Http.AsParameters");
+                            list = new List<string>();
+                            paramConfig.PropertyAttributes[propName] = list;
+                        }
+                        foreach (var a in propAttrs)
+                        {
+                            if (!list.Contains(a)) list.Add(a);
                         }
                     }
-                    else if (methodName == "Property" && invocation.ArgumentList.Arguments.Count == 2)
-                    {
-                        paramConfig.IsAsParameters = true;
-                        var propSelectorExpr = invocation.ArgumentList.Arguments[0].Expression;
-                        var propConfigureExpr = invocation.ArgumentList.Arguments[1].Expression;
+                }
+            }
+            else
+            {
+                if (IsInsidePropertyActionLambda(invocation, configureMethodSyntax))
+                    continue;
 
-                        var propName = ExtractPropertyNameFromSelector(propSelectorExpr);
-                        if (propName != null)
-                        {
-                            var propAttrs = ExtractAttributesFromNestedLambda(propConfigureExpr);
-                            if (propAttrs.Count > 0)
-                            {
-                                if (!paramConfig.PropertyAttributes.TryGetValue(propName, out var list))
-                                {
-                                    list = new List<string>();
-                                    paramConfig.PropertyAttributes[propName] = list;
-                                }
-                                foreach (var a in propAttrs)
-                                {
-                                    if (!list.Contains(a)) list.Add(a);
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        if (IsInsidePropertyActionLambda(invocation, configureMethodSyntax))
-                            continue;
-
-                        var attr = MapConfigurationCallToAttribute(methodName, invocation.ArgumentList.Arguments);
-                        if (attr != null && !paramConfig.DirectAttributes.Contains(attr))
-                        {
-                            paramConfig.DirectAttributes.Add(attr);
-                        }
-                    }
+                var attr = MapConfigurationCallToAttribute(methodName, invocation.ArgumentList.Arguments);
+                if (attr != null && !paramConfig.DirectAttributes.Contains(attr))
+                {
+                    paramConfig.DirectAttributes.Add(attr);
                 }
             }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Applies pre-collected external parameter configurations to an endpoint's parameter list.
+    /// Runs once per endpoint in RegisterSourceOutput, not per Map* transform.
+    /// </summary>
+    private static void ApplyExternalParameterConfigurations(
+        EndpointToGenerate endpoint,
+        Dictionary<string, Dictionary<string, ExternalParameterConfig>> configsByHandler,
+        Compilation compilation)
+    {
+        if (!configsByHandler.TryGetValue(endpoint.HandlerTypeName, out var externalParamConfigs) ||
+            externalParamConfigs.Count == 0)
+        {
+            return;
+        }
+
+        var handlerType = compilation.GetTypeByMetadataName(
+            endpoint.HandlerTypeName.Replace("global::", string.Empty));
+
+        // Fallback: search all assemblies for the type by display name.
+        if (handlerType is null)
+        {
+            foreach (var type in compilation.GetSymbolsWithName(
+                endpoint.HandlerTypeName.Split('.').Last().Replace("global::", ""),
+                SymbolFilter.Type))
+            {
+                if (type is INamedTypeSymbol named &&
+                    named.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == endpoint.HandlerTypeName)
+                {
+                    handlerType = named;
+                    break;
+                }
+            }
+        }
+
+        if (handlerType is null)
+            return;
+
+        var executeMethod = handlerType.GetMembers("ExecuteAsync")
+            .OfType<IMethodSymbol>()
+            .FirstOrDefault(m => m.DeclaredAccessibility == Accessibility.Public);
+
+        if (executeMethod is null)
+            return;
+
+        // Resolve PascalCase keys to actual parameter names if needed.
+        var resolvedConfigs = new Dictionary<string, ExternalParameterConfig>(StringComparer.Ordinal);
+        var pascalToParamName = executeMethod.Parameters.ToDictionary(
+            p => ToPascalCase(p.Name),
+            p => p.Name,
+            StringComparer.Ordinal);
+
+        foreach (var kv in externalParamConfigs)
+        {
+            var key = kv.Key;
+            if (!executeMethod.Parameters.Any(p => p.Name == key) &&
+                pascalToParamName.TryGetValue(key, out var mapped))
+            {
+                key = mapped;
+            }
+            resolvedConfigs[key] = kv.Value;
+        }
+
+        var handlerShortName = Sanitize(handlerType.Name);
+        var newParameters = new List<ParameterToGenerate>();
+
+        foreach (var p in executeMethod.Parameters)
+        {
+            var existing = endpoint.Parameters.FirstOrDefault(ep => ep.Name == p.Name);
+            var inlineAttrs = existing is not null
+                ? new List<string>(existing.Attributes)
+                : p.GetAttributes()
+                    .Select(attr => attr.ApplicationSyntaxReference?.GetSyntax().ToString())
+                    .Where(s => s != null)
+                    .Cast<string>()
+                    .ToList();
+
+            var paramTypeDisplay = p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var isNullable = p.Type.NullableAnnotation == NullableAnnotation.Annotated;
+            var paramAccessibility = GetEffectiveAccessibility(p.Type);
+
+            if (resolvedConfigs.TryGetValue(p.Name, out var extConfig))
+            {
+                if (extConfig.IsAsParameters && extConfig.PropertyAttributes.Count > 0 &&
+                    p.Type is INamedTypeSymbol namedParamType)
+                {
+                    var surrogateInfo = BuildAsParametersSurrogate(
+                        handlerShortName, p.Name, namedParamType, extConfig.PropertyAttributes);
+                    if (surrogateInfo != null)
+                    {
+                        var surrogateAttrs = new List<string>(inlineAttrs);
+                        if (!surrogateAttrs.Any(a => a.Contains("AsParameters")))
+                        {
+                            surrogateAttrs.Add("Microsoft.AspNetCore.Http.AsParameters");
+                        }
+
+                        newParameters.Add(new ParameterToGenerate(
+                            paramTypeDisplay,
+                            p.Name,
+                            surrogateAttrs,
+                            isNullable,
+                            paramAccessibility,
+                            surrogateInfo));
+                        continue;
+                    }
+                }
+
+                foreach (var attr in extConfig.DirectAttributes)
+                {
+                    if (!inlineAttrs.Contains(attr))
+                    {
+                        inlineAttrs.Add(attr);
+                    }
+                }
+            }
+
+            newParameters.Add(new ParameterToGenerate(
+                paramTypeDisplay,
+                p.Name,
+                inlineAttrs,
+                isNullable,
+                paramAccessibility,
+                null));
+        }
+
+        endpoint.Parameters.Clear();
+        endpoint.Parameters.AddRange(newParameters);
     }
 
     private static bool IsInsidePropertyActionLambda(SyntaxNode node, SyntaxNode stopAtNode)
