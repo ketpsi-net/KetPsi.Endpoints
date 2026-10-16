@@ -375,7 +375,21 @@ internal static class ProtoSchemaEmitter
     private static string SanitizeProtoIdent(string name)
     {
         if (string.IsNullOrEmpty(name)) return "Unknown";
-        // proto identifiers: letters, digits, underscore; must not start with digit
+        // Package names use '.' as separators (e.g. api.tests.v1) — sanitize each segment only
+        if (name.IndexOf('.') >= 0)
+        {
+            var parts = name.Split('.');
+            for (var i = 0; i < parts.Length; i++)
+                parts[i] = SanitizeProtoIdentSegment(parts[i]);
+            return string.Join(".", parts);
+        }
+        return SanitizeProtoIdentSegment(name);
+    }
+
+    private static string SanitizeProtoIdentSegment(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return "Unknown";
+        // proto identifier segment: letters, digits, underscore; must not start with digit
         var chars = name.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray();
         if (chars.Length > 0 && char.IsDigit(chars[0]))
             return "_" + new string(chars);
