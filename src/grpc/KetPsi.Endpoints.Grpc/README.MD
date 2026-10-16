@@ -1,8 +1,15 @@
 # KetPsi.Endpoints.Grpc
 
-Code-first **gRPC** endpoints for the KetPsi stack. Define a handler with `ExecuteAsync` once; a Roslyn incremental generator emits protobuf-net.Grpc service contracts, proxies, DI registration, and mapping — **no `.proto` files to maintain**.
+Code-first **gRPC** endpoints for the KetPsi stack. Define a handler with `ExecuteAsync` once; a Roslyn incremental generator emits:
 
-Same handler shape as [KetPsi.Endpoints.Http](https://www.nuget.org/packages/KetPsi.Endpoints.Http); protocol-specific packages handle HTTP vs gRPC.
+- Compile-time **proto3** schema (`GET /proto`)
+- Pure wire codecs (no protobuf-net runtime model)
+- `IServiceMethodProvider` binding for Grpc.AspNetCore
+- DI registration (`AddGrpcServices`) and `MapGrpcEndpoints`
+
+Cross-language clients use the standard `.proto` — not .NET-specific proxies.
+
+Same handler marker (`IEndpoint`) as [KetPsi.Endpoints.Http](https://www.nuget.org/packages/KetPsi.Endpoints.Http).
 
 ---
 
@@ -12,7 +19,7 @@ Same handler shape as [KetPsi.Endpoints.Http](https://www.nuget.org/packages/Ket
 dotnet add package KetPsi.Endpoints.Grpc
 ```
 
-Also reference abstractions if you configure protobuf types in the Application layer:
+Configure types in the Application layer without ASP.NET references:
 
 ```bash
 dotnet add package KetPsi.Endpoints.Grpc.Abstractions
@@ -25,126 +32,250 @@ dotnet add package KetPsi.Endpoints.Grpc.Abstractions
 ### 1. Handler
 
 ```csharp
-public class GetUserByIdHandler
+public sealed class GetUserByIdHandler : IEndpoint
 {
     public Task<GetUserResponse> ExecuteAsync(GetUserRequest request, CancellationToken ct)
         => Task.FromResult(new GetUserResponse { Id = request.Id, Name = "Ada" });
 }
 ```
 
-### 2. Map it
-
-Route format (enforced by analyzer **DG001**):
-
-- `Namespace/Service/Method` → contract `Namespace.Service`, method `Method`
-- `Service/Method` → defaults namespace to `Api`
-
-```csharp
-app.MapGrpc<GetUserByIdHandler>("Api/Users/GetById");
-// or
-app.MapGrpcUnary<GetUserByIdHandler>("Users/GetById");
-```
-
-Variants: `MapGrpc`, `MapGrpcUnary`, `MapGrpcClientStream`, `MapGrpcServerStream`, `MapGrpcDuplexStream`.
-
-### 3. Register generated endpoints
+### 2. Map and register
 
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
 
-builder.AddGrpc();                          // Code-first gRPC
-builder.Services.AddGrpcServices();         // generated – registers handlers
-// optional:
-builder.Services.AddProtoEndpoint();
+builder.AddGrpc();
+builder.Services.AddGrpcServices();   // generated
+builder.Services.AddProtoEndpoint();  // optional options hook
 
 var app = builder.Build();
 
-app.MapGrpc<GetUserByIdHandler>("Api/Users/GetById");
-app.MapGrpcEndpoints();                     // generated – maps proxies
-
-// optional – human-readable schema:
-app.UseProtoEndpoint();                     // GET /proto
+app.MapGrpc<GetUserByIdHandler>("Users/GetById");
+app.MapGrpcEndpoints();               // generated
+app.UseProtoEndpoint();               // optional GET /proto
 
 app.Run();
 ```
 
----
-
-## Optional `/proto` endpoint
-
-| Method | Side | Purpose |
-|--------|------|---------|
-| `AddProtoEndpoint()` | `IServiceCollection` | DI hook (reserved for options) |
-| `UseProtoEndpoint()` | `WebApplication` | Maps `GET /proto` with aggregated protobuf schema |
-
-Call `UseProtoEndpoint()` only when you want the endpoint. It is **not** registered by `MapGrpcEndpoints`.
+Variants: `MapGrpc`, `MapGrpcUnary`, `MapGrpcClientStream`, `MapGrpcServerStream`, `MapGrpcDuplexStream`.
 
 ---
 
-## Protobuf type configuration
+## Routing
 
-Use [KetPsi.Endpoints.Grpc.Abstractions](https://www.nuget.org/packages/KetPsi.Endpoints.Grpc.Abstractions) in Application projects:
+### Relative route on `MapGrpc`
+
+The string argument is **service / method** (and optional path prefix segments). Analyzer **DG001** requires **at least two** non-parameter segments. There is **no** three-segment maximum. Segments like `{id}` are ignored when counting.
+
+| `MapGrpc` route | Service | RPC |
+|-----------------|---------|-----|
+| `Users/GetById` | `Users` | `GetById` |
+| `billing/Orders/Create` | `Orders` | `Create` |
+| `Orders/{id}/Get` | `Orders` | `Get` (`{id}` skipped) |
+
+### Package (proto `package`)
+
+1. **MapGroup** path prefixes are prepended (supports locals: `var g = app.MapGroup(...); g.MapGrpc(...)`).
+2. Remaining path segments **before** service/method become the package (joined with `.`).
+3. If nothing is left for the package, default is `Api`.
+4. **Version** comes **only** from the last **`WithGroupName("...")`** on the chain, appended as `.v1` (proto-style), not from treating path segments as versions.
 
 ```csharp
-using KetPsi.Endpoints.Grpc.Abstractions;
+// package Api; service Users; rpc GetById
+app.MapGrpc<GetUserByIdHandler>("Users/GetById");
 
-public class UserResponseConfig : IProtoTypeConfiguration<UserResponse>
+// package api.tests; service Users; rpc GetById
+app.MapGroup("/api/tests").MapGrpc<GetUserByIdHandler>("Users/GetById");
+
+// package api.tests.v1; service test; rpc create
+var group = app.MapGroup("/api/tests").WithGroupName("v1");
+group.MapGrpc<CreateHandler>("test/create");
+```
+
+```protobuf
+package api.tests.v1;
+
+service test {
+  rpc create (CreateRequest) returns (CreateResponse);
+}
+```
+
+### `MapGroup` + `WithGroupName`
+
+`MapGrpc` is defined on:
+
+- `WebApplication` — top-level mapping
+- `IEndpointConventionBuilder` — after `MapGroup` / `WithGroupName` (required because `WithGroupName` returns that interface)
+
+Prefer fluent chains or assign the group to a local; both are resolved by the generator.
+
+### Conventions (`RequireAuthorization`)
+
+`MapGrpc` returns `IEndpointConventionBuilder`:
+
+```csharp
+app.MapGroup("/api/tests")
+   .WithGroupName("v1")
+   .MapGrpc<CreateOrderHandler>("orders/create")
+   .RequireAuthorization()
+   .RequireAuthorization("OrdersPolicy");
+```
+
+Conventions are stored by route and applied when `MapGrpcEndpoints` calls `MapGrpcService`.
+
+---
+
+## Authentication & authorization
+
+gRPC on ASP.NET Core uses the same HTTP/2 pipeline as other endpoints.
+
+### Server
+
+```csharp
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer();
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGrpc<SecureHandler>("Users/GetById")
+   .RequireAuthorization();
+
+app.MapGrpcEndpoints();
+```
+
+- Incoming `Authorization` is a normal request header; JWT bearer works without putting tokens on the protobuf contract.
+- In handlers, resolve the user with `IHttpContextAccessor` or `ServerCallContext.GetHttpContext().User`.
+
+```csharp
+public sealed class SecureHandler : IEndpoint
 {
-    public void Configure(IProtoTypeBuilder<UserResponse> builder)
+    private readonly IHttpContextAccessor _http;
+    public SecureHandler(IHttpContextAccessor http) => _http = http;
+
+    public Task<GetUserResponse> ExecuteAsync(GetUserRequest request, CancellationToken ct)
     {
-        builder.Property(x => x.Id, 1)
-               .Property(x => x.Name, 2)
-               .UseConstrcutor(false);
+        var user = _http.HttpContext?.User;
+        // ...
     }
 }
 ```
 
-Open generics:
+Register `builder.Services.AddHttpContextAccessor();`.
+
+### Propagating auth to downstream gRPC services
+
+Copy the header onto outgoing metadata (or use a client interceptor):
 
 ```csharp
-public class WrapperConfig : IOpenProtoTypeConfiguration
+var auth = callContext.RequestHeaders.GetValue("authorization");
+var headers = new Metadata();
+if (!string.IsNullOrEmpty(auth))
+    headers.Add("Authorization", auth);
+```
+
+Do **not** model bearer tokens as protobuf fields unless you intentionally want them in the contract.
+
+---
+
+## Header binding (`FromHeader`)
+
+Bind request DTO properties from gRPC metadata (not from the wire message). Configure on **`IGrpcEndpointConfiguration<TEndpoint>`**, not on `IProtoTypeConfiguration`.
+
+```csharp
+public sealed class CreateOrderConfig : IGrpcEndpointConfiguration<CreateOrderHandler>
 {
-    public void Configure(IOpenProtoTypeBuilder builder)
+    public void Configure(IGrpcEndpointBuilder<CreateOrderHandler> builder)
     {
-        builder.ConfigureGeneric(typeof(Wrapper<>), meta =>
+        builder.Request<CreateOrderRequest>(req =>
         {
-            meta.Property("Value", 1);
-            meta.UseConstrcutor(false);
+            req.Property(x => x.TenantId, p => p.FromHeader("x-tenant-id"));
+            req.Property(x => x.TraceId, p => p.FromHeader()); // key = property name
         });
     }
 }
 ```
 
-The generator applies closed generics discovered in handler signatures.
+Header-bound properties are omitted from the `/proto` schema and codecs. Applied after deserialize, before the handler runs.
 
 ---
 
-## What the generator emits
+## Per-handler interceptors
 
-| Output | Description |
-|--------|-------------|
-| `*_GrpcService.g.cs` | `[ServiceContract]` interface + proxy per service route |
-| `GeneratedGrpcRegistrationExtensions.g.cs` | `AddGrpcServices`, `MapGrpcEndpoints`, `UseProtoEndpoint` |
+```csharp
+public sealed class CreateOrderConfig : IGrpcEndpointConfiguration<CreateOrderHandler>
+{
+    public void Configure(IGrpcEndpointBuilder<CreateOrderHandler> builder)
+    {
+        builder.AddInterceptor<AuditInterceptor>();
+        builder.AddInterceptor<TenantInterceptor>();
+    }
+}
+```
 
-Route analyzer **DG001** fails the build on invalid routes (not 2 or 3 non-empty segments).
+- Discovered at compile time; registered in `AddGrpcServices`.
+- Applied only on that handler’s methods inside the generated `IServiceMethodProvider` pipeline (not global `GrpcServiceOptions.Interceptors`).
+- Resolved from `RequestServices` on the call’s `HttpContext`.
 
 ---
 
-## Package relationships
+## Optional `/proto` endpoint
 
-```
-KetPsi.Endpoints.Abstractions           ← shared IEndpoint (optional for gRPC handlers)
-KetPsi.Endpoints.Grpc.Abstractions      ← IProtoTypeConfiguration / open-generic builders
-        ▲
-KetPsi.Endpoints.Grpc                  ← runtime + generatorerator (this package)
-```
+| Method | Purpose |
+|--------|---------|
+| `AddProtoEndpoint()` | DI hook (options reserved) |
+| `UseProtoEndpoint()` | Maps `GET /proto` with compile-time schema |
+
+Not registered by `MapGrpcEndpoints`; call `UseProtoEndpoint()` explicitly when needed.
+
+Non-.NET teams generate clients from this schema with standard `protoc` tooling.
 
 ---
 
-## Requirements
+## Protobuf type configuration
 
-- .NET 8 / 9 / 10
-- ASP.NET Core (shared framework)
-- protobuf-net + protobuf-net.Grpc.AspNetCore
+Use **KetPsi.Endpoints.Grpc.Abstractions** in Application projects:
+
+```csharp
+public sealed class GetUserRequestConfig : IProtoTypeConfiguration<GetUserRequest>
+{
+    public void Configure(IProtoTypeBuilder<GetUserRequest> builder)
+    {
+        builder.Property(x => x.Id, 1)
+               .Property(x => x.Name, 2);
+    }
+}
 ```
 
+Field numbers drive schema emission and pure wire codecs at compile time.
+
+---
+
+## Package layout
+
+| Package | Role |
+|---------|------|
+| `KetPsi.Endpoints.Abstractions` | `IEndpoint` marker |
+| `KetPsi.Endpoints.Grpc.Abstractions` | Proto type configuration |
+| `KetPsi.Endpoints.Grpc` | Runtime + extensions |
+| `KetPsi.Endpoints.Grpc.Generator` | Source generator + `DG001` route analyzer |
+
+Target frameworks: `net8.0`, `net9.0`, `net10.0`.
+
+---
+
+## Diagnostics
+
+| Id | Meaning |
+|----|---------|
+| **DG001** | `MapGrpc` relative route has fewer than 2 non-parameter segments |
+
+---
+
+## Notes
+
+- Prefer `WithGroupName` for **API version** in the proto package; keep `MapGroup` paths for hierarchical naming.
+- Fluent `MapGroup(...).WithGroupName(...).MapGrpc(...)` or `var group = ...` are both supported for group discovery.
+- Authentication is pipeline-based; header binding is for business metadata, not a replacement for `UseAuthentication`.
