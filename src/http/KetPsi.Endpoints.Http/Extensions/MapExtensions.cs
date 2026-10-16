@@ -18,11 +18,10 @@ public static class MapExtensions
     /// <param name="route">This parameter specifies the URL pattern for the GET endpoint being mapped.</param>
     /// <returns>The method returns an object that allows further configuration of the mapped endpoint.</returns>
     public static RouteHandlerBuilder MapGet<TEndpoint>(this IEndpointRouteBuilder endpointRouteBuilder, [StringSyntax("Route")] string route)
-       where TEndpoint : class
+       where TEndpoint : class, IEndpoint
     {
         return new RouteHandlerBuilder([new EmptyEndpointConventionBuilder(endpointRouteBuilder.ServiceProvider)]);
     }
-
 
     /// <summary>
     /// Maps a POST endpoint to a specified route using a service handler.
@@ -58,6 +57,19 @@ public static class MapExtensions
     /// <param name="route">This parameter specifies the URL pattern for the DELETE request.</param>
     /// <returns>The method returns an endpoint convention builder for further configuration.</returns>
     public static RouteHandlerBuilder MapDelete<TEndpoint>(this IEndpointRouteBuilder endpointRouteBuilder, [StringSyntax("Route")] string route)
+        where TEndpoint : class, IEndpoint
+    {
+        return new RouteHandlerBuilder([new EmptyEndpointConventionBuilder(endpointRouteBuilder.ServiceProvider)]);
+    }
+
+    /// <summary>
+    /// Maps a PATCH endpoint to a specified route using a service handler.
+    /// </summary>
+    /// <typeparam name="TEndpoint">This type parameter is used to specify the class that handles the service logic for the endpoint.</typeparam>
+    /// <param name="endpointRouteBuilder">This parameter represents the application context where the endpoint is being defined.</param>
+    /// <param name="route">This parameter specifies the URL pattern for the PATCH endpoint being mapped.</param>
+    /// <returns>The method returns an object that allows further configuration of the mapped endpoint.</returns>
+    public static RouteHandlerBuilder MapPatch<TEndpoint>(this IEndpointRouteBuilder endpointRouteBuilder, [StringSyntax("Route")] string route)
         where TEndpoint : class, IEndpoint
     {
         return new RouteHandlerBuilder([new EmptyEndpointConventionBuilder(endpointRouteBuilder.ServiceProvider)]);
