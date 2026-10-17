@@ -9,16 +9,20 @@ public ref struct ProtoWireWriter
 {
     private IBufferWriter<byte> _output;
 
+    /// <summary>Creates a writer that advances <paramref name="output"/> as tags and payloads are written.</summary>
     public ProtoWireWriter(IBufferWriter<byte> output)
     {
         _output = output;
     }
 
+    /// <summary>No-op dispose (ref struct lifetime is the caller's responsibility).</summary>
     public void Dispose() { }
 
+    /// <summary>Writes a protobuf field tag (field number + wire type).</summary>
     public void WriteTag(int fieldNumber, ProtoWireType wireType)
         => WriteVarint((uint)((fieldNumber << 3) | (int)wireType));
 
+    /// <summary>Writes an unsigned varint (base-128).</summary>
     public void WriteVarint(ulong value)
     {
         var span = _output.GetSpan(10);
@@ -32,6 +36,7 @@ public ref struct ProtoWireWriter
         _output.Advance(i);
     }
 
+    /// <summary>Writes an unsigned 32-bit value as a varint.</summary>
     public void WriteVarint(uint value) => WriteVarint((ulong)value);
 
     /// <summary>
@@ -39,11 +44,16 @@ public ref struct ProtoWireWriter
     /// </summary>
     public void WriteInt32(int value) => WriteVarint(unchecked((ulong)(long)value));
 
+    /// <summary>Writes a signed int64 as a varint.</summary>
     public void WriteInt64(long value) => WriteVarint(unchecked((ulong)value));
+    /// <summary>Writes a uint32 as a varint.</summary>
     public void WriteUInt32(uint value) => WriteVarint(value);
+    /// <summary>Writes a uint64 as a varint.</summary>
     public void WriteUInt64(ulong value) => WriteVarint(value);
+    /// <summary>Writes a bool as a varint 0/1.</summary>
     public void WriteBool(bool value) => WriteVarint(value ? 1u : 0u);
 
+    /// <summary>Writes a fixed32 (little-endian 4 bytes).</summary>
     public void WriteFixed32(uint value)
     {
         var span = _output.GetSpan(4);
@@ -51,6 +61,7 @@ public ref struct ProtoWireWriter
         _output.Advance(4);
     }
 
+    /// <summary>Writes a fixed64 (little-endian 8 bytes).</summary>
     public void WriteFixed64(ulong value)
     {
         var span = _output.GetSpan(8);
@@ -58,7 +69,9 @@ public ref struct ProtoWireWriter
         _output.Advance(8);
     }
 
+    /// <summary>Writes a float as fixed32.</summary>
     public void WriteFloat(float value) => WriteFixed32(unchecked((uint)BitConverter.SingleToInt32Bits(value)));
+    /// <summary>Writes a double as fixed64.</summary>
     public void WriteDouble(double value) => WriteFixed64(unchecked((ulong)BitConverter.DoubleToInt64Bits(value)));
 
     /// <summary>
@@ -68,6 +81,7 @@ public ref struct ProtoWireWriter
     public void WriteLengthDelimitedBytes(ReadOnlySpan<byte> data)
         => WriteBytes(data);
 
+    /// <summary>Writes length-delimited raw bytes (length varint + payload).</summary>
     public void WriteBytes(ReadOnlySpan<byte> data)
     {
         WriteVarint((uint)data.Length);
