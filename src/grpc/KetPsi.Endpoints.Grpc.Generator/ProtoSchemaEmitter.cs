@@ -135,10 +135,11 @@ internal static class ProtoSchemaEmitter
 
         void AddMessage(string name, System.Collections.Immutable.ImmutableArray<ProtoFieldModel> fields)
         {
-            if (string.IsNullOrEmpty(name) || fields.IsDefaultOrEmpty)
+            // Empty messages (no properties) must still be declared — RPCs reference them by name
+            if (string.IsNullOrEmpty(name))
                 return;
             if (!messages.ContainsKey(name))
-                messages[name] = fields.ToList();
+                messages[name] = fields.IsDefaultOrEmpty ? new List<ProtoFieldModel>() : fields.ToList();
         }
 
         foreach (var ep in list)
@@ -484,8 +485,7 @@ internal static class ProtoSchemaEmitter
                 return;
 
             var fields = ExtractFields(type);
-            if (fields.Fields.Count == 0)
-                return;
+            // Zero-property types are still valid protobuf messages (empty message body)
 
             messages.Add(new NestedMessageModel(
                 key,
