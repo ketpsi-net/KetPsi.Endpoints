@@ -6,16 +6,20 @@ public ref struct ProtoWireReader
     private ReadOnlySpan<byte> _data;
     private int _pos;
 
+    /// <summary>Creates a reader over <paramref name="data"/>.</summary>
     public ProtoWireReader(ReadOnlySpan<byte> data)
     {
         _data = data;
         _pos = 0;
     }
 
+    /// <summary>True when all bytes have been consumed.</summary>
     public bool IsAtEnd => _pos >= _data.Length;
+    /// <summary>Current read offset.</summary>
     public int Position => _pos;
     public int Length => _data.Length;
 
+    /// <summary>Reads the next field tag, or returns false at end of buffer.</summary>
     public bool TryReadTag(out int fieldNumber, out ProtoWireType wireType)
     {
         fieldNumber = 0;
@@ -27,12 +31,14 @@ public ref struct ProtoWireReader
         return fieldNumber != 0;
     }
 
+    /// <summary>Reads a varint truncated to 32 bits.</summary>
     public uint ReadVarint32()
     {
         // Allow full 64-bit varint then truncate — negative int32 arrives as 10-byte varint.
         return unchecked((uint)ReadVarint64());
     }
 
+    /// <summary>Reads a full varint (up to 10 bytes).</summary>
     public ulong ReadVarint64()
     {
         ulong result = 0;

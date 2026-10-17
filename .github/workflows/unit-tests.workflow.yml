@@ -51,14 +51,17 @@ jobs:
           dotnet tool install -g dotnet-reportgenerator-globaltool
           export PATH="$PATH:/home/runner/.dotnet/tools"
           # The native collector creates files named straight 'cobertura.xml' rather than 'coverage.cobertura.xml'
-          reportgenerator -reports:"./TestResults/**/*.xml" -targetdir:"./CoverageReport" -reporttypes:"Cobertura"
+          reportgenerator -reports:"./TestResults/**/*.xml" -targetdir:"./CoverageReport" -reporttypes:"Cobertura;MarkdownSummaryGithub" -assemblyfilters:"-*.Tests;-*Tests*" 
 
-      - name: Archive code coverage results
-        uses: 5monkeys/cobertura-action@master
-        with:
-          path: CoverageReport/Cobertura.xml
-          name: code-coverage-report
-          minimum_coverage: 45
+      # - name: Archive code coverage results
+      #   uses: 5monkeys/cobertura-action@master
+      #   with:
+      #     path: CoverageReport/Cobertura.xml
+      #     name: code-coverage-report
+      #     minimum_coverage: 45
+
+      - name: Publish Coverage Summary to GitHub Actions
+        run: cat ./CoverageReport/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
 
       - name: Archive test results
         uses: mikepenz/action-junit-report@v4

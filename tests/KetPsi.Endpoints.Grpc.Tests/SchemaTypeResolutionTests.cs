@@ -173,4 +173,15 @@ public class SchemaTypeResolutionTests : IAsyncLifetime
         Assert.Contains("AllScalarsMessage", proto);
         Assert.Contains("EchoResponse", proto);
     }
+
+    [Fact]
+    public async Task Schema_EmptyRequestMessage_IsDeclared()
+    {
+        var proto = await GetProtoAsync();
+        // Empty DTOs must still emit "message EmptyRequestContract { }" so RPC references resolve
+        Assert.Contains("message EmptyRequestContract", proto, StringComparison.Ordinal);
+        Assert.Contains("EmptyRequestContract", proto, StringComparison.Ordinal);
+        Assert.Contains("EmptyResponseContract", proto, StringComparison.Ordinal);
+    }
+
 }

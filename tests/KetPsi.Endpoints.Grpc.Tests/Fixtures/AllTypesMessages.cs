@@ -273,3 +273,35 @@ public sealed class MapOnlyHandler : IEndpoint
         => Task.FromResult(new EchoResponse { Ok = "map" });
 }
 
+
+/// <summary>Empty request DTO — must still appear as an empty message in /proto and have a marshaller.</summary>
+public sealed class EmptyRequestContract
+{
+}
+
+public sealed class EmptyResponseContract
+{
+    public int Ok { get; set; }
+}
+
+public sealed class EmptyRequestHandler : IEndpoint
+{
+    public Task<EmptyResponseContract> ExecuteAsync(EmptyRequestContract request, CancellationToken ct)
+        => Task.FromResult(new EmptyResponseContract { Ok = 1 });
+}
+
+public sealed class EmptyRequestContractConfig : IProtoTypeConfiguration<EmptyRequestContract>
+{
+    public void Configure(IProtoTypeBuilder<EmptyRequestContract> builder)
+    {
+        // no properties
+    }
+}
+
+public sealed class EmptyResponseContractConfig : IProtoTypeConfiguration<EmptyResponseContract>
+{
+    public void Configure(IProtoTypeBuilder<EmptyResponseContract> builder)
+    {
+        builder.Property(x => x.Ok, 1);
+    }
+}
