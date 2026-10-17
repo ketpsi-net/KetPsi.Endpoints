@@ -20,7 +20,7 @@ public class ApiResultErrorTests
         Assert.Equal("resource.not_found", api.Code);
         Assert.Equal("missing", api.Message);
         Assert.Equal("NotFound", api.Title);
-        Assert.Equal(9, api.Metadata!["id"]);
+        Assert.Equal("9", api.Metadata!["id"]);
         Assert.Equal(404, api.StatusCode);
     }
 

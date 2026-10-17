@@ -1,11 +1,8 @@
 using System.Collections.Immutable;
 
-using KetPsi.Endpoints.Grpc.Generator;
-
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
-using Microsoft.CodeAnalysis.Text;
 
 using Xunit;
 
@@ -15,14 +12,14 @@ public class GrpcRouteAnalyzerTests
 {
     private static async Task<ImmutableArray<Diagnostic>> GetDiagnosticsAsync(string source)
     {
-        var tree = CSharpSyntaxTree.ParseText(SourceText.From(source));
+        var syntaxTree = CSharpSyntaxTree.ParseText(source);
         var compilation = CSharpCompilation.Create(
-            "TestAssembly",
-            new[] { tree },
+            "AnalyzerTest",
+            new[] { syntaxTree },
             new[]
             {
                 MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
-                MetadataReference.CreateFromFile(typeof(Microsoft.AspNetCore.Builder.WebApplication).Assembly.Location),
+                MetadataReference.CreateFromFile(typeof(Enumerable).Assembly.Location),
             },
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
@@ -31,51 +28,39 @@ public class GrpcRouteAnalyzerTests
         return await compilationWithAnalyzers.GetAnalyzerDiagnosticsAsync();
     }
 
-    [Theory]
-    [InlineData("Api/Users/GetById")]          // 3 segments – valid
-    [InlineData("Users/GetById")]              // 2 segments – valid
-    public async Task ValidRoutes_ProduceNoDiagnostics(string route)
-    {
-        var source = $$"""
-            using Microsoft.AspNetCore.Builder;
-            public static class C {
-                public static void M(WebApplication app) {
-                    app.MapGrpc<Handler>("{{route}}");
-                }
+    private static string SourceWithRoute(string route) => $$"""
+        public class WebApplication { }
+        public static class C {
+            public static void M(WebApplication app) {
+                app.MapGrpc<Handler>("{{route}}");
             }
-            public class Handler { }
-            public static class Ext {
-                public static WebApplication MapGrpc<T>(this WebApplication app, string route) => app;
-            }
-            """;
+        }
+        public class Handler { }
+        public static class Ext {
+            public static WebApplication MapGrpc<T>(this WebApplication app, string route) => app;
+        }
+        """;
 
-        var diags = await GetDiagnosticsAsync(source);
+    [Theory]
+    [InlineData("Users/GetById")]
+    [InlineData("Api/Users/GetById")]
+    [InlineData("A/B/C/D")]
+    [InlineData("Orders/{id}/Get")]
+    public async Task ValidRoutes_NoDG001(string route)
+    {
+        var diags = await GetDiagnosticsAsync(SourceWithRoute(route));
         Assert.DoesNotContain(diags, d => d.Id == GrpcRouteAnalyzer.DiagnosticId);
     }
 
     [Theory]
-    [InlineData("OnlyOne")]                    // 1 segment
-    [InlineData("A/B/C/D")]                    // 4 segments
-    [InlineData("")]                           // empty
-    [InlineData("Api//GetById")]               // empty middle segment
-    [InlineData("/Users/GetById")]             // leading empty
-    [InlineData("Users/GetById/")]             // trailing empty
+    [InlineData("OnlyOne")]
+    [InlineData("")]
+    [InlineData("Api//GetById")]
+    [InlineData("/Users/GetById")]
+    [InlineData("Users/GetById/")]
     public async Task InvalidRoutes_ProduceDG001(string route)
     {
-        var source = $$"""
-            using Microsoft.AspNetCore.Builder;
-            public static class C {
-                public static void M(WebApplication app) {
-                    app.MapGrpc<Handler>("{{route}}");
-                }
-            }
-            public class Handler { }
-            public static class Ext {
-                public static WebApplication MapGrpc<T>(this WebApplication app, string route) => app;
-            }
-            """;
-
-        var diags = await GetDiagnosticsAsync(source);
+        var diags = await GetDiagnosticsAsync(SourceWithRoute(route));
         Assert.Contains(diags, d => d.Id == GrpcRouteAnalyzer.DiagnosticId);
     }
 }
