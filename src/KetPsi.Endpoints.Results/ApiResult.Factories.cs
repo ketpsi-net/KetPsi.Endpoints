@@ -125,14 +125,26 @@ public static partial class ApiResult
     }
 
     // ───────────────────────────── Internal helpers ─────────────────────────────
+    private static Dictionary<string, string?>? GetMetadata(IReadOnlyDictionary<string, object?>? errors)
+    {
+        if (errors is null)
+            return null;
 
+        var result = new Dictionary<string, string?>();
+        foreach (var keyValue in errors)
+        {
+            result[keyValue.Key] = keyValue.Value?.ToString();
+        }
+
+        return result;
+    }
     private static ApiResult<object?> Fail(
         int statusCode,
         string code,
         string message,
         string title,
         IReadOnlyDictionary<string, object?>? metadata)
-        => new(statusCode, null, [new ApiResultError(code, message, title, metadata, statusCode)]);
+        => new(statusCode, null, [new ApiResultError(code, message, title, GetMetadata(metadata), statusCode)]);
 
     private static ApiResult<T> Fail<T>(
         int statusCode,
@@ -140,7 +152,7 @@ public static partial class ApiResult
         string message,
         string title,
         IReadOnlyDictionary<string, object?>? metadata)
-        => new(statusCode, default, [new ApiResultError(code, message, title, metadata, statusCode)]);
+        => new(statusCode, default, [new ApiResultError(code, message, title, GetMetadata(metadata), statusCode)]);
 
     private static IReadOnlyList<ApiResultError> Normalize(ApiResultError[] errors, int defaultStatus)
     {
