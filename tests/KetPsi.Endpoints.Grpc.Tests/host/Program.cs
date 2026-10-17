@@ -4,7 +4,6 @@ using KetPsi.Endpoints.Grpc.Tests.Fixtures;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 var arguments = args.Where(x => !x.StartsWith("--contentRoot")).ToList();
 arguments.Add($"--contentRoot={AppContext.BaseDirectory}");
@@ -24,6 +23,7 @@ builder.Services.AddScoped<PrimaryCtorOrderHandler>();
 builder.Services.AddScoped<PrivateSetterOrderHandler>();
 builder.Services.AddScoped<InitOnlyOrderHandler>();
 builder.Services.AddScoped<MapOnlyHandler>();
+builder.Services.AddScoped<EmptyRequestHandler>();
 
 var app = builder.Build();
 
@@ -37,6 +37,7 @@ app.MapGrpc<PrimaryCtorOrderHandler>("Codec/PrimaryCtor/Echo");
 app.MapGrpc<PrivateSetterOrderHandler>("Codec/PrivateSet/Echo");
 app.MapGrpc<InitOnlyOrderHandler>("Codec/InitOnly/Echo");
 app.MapGrpc<MapOnlyHandler>("Codec/Map/Echo");
+app.MapGrpc<EmptyRequestHandler>("Codec/Empty/Ping");
 
 app.MapGrpcEndpoints();
 app.UseProtoEndpoint();

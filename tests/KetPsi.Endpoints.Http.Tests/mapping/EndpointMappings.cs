@@ -31,6 +31,9 @@ public static class EndpointMappings
         app.MapDelete<DeleteUserHandler>("/users/{id}")
            .WithName("DeleteUser");
 
+        app.MapPatch<PatchUserHandler>("/users/{id}")
+           .WithName("PatchUser");
+
         app.MapDelete<BulkDeleteUsersHandler>("/users")
            .WithName("BulkDeleteUsers");
 

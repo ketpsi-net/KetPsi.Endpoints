@@ -42,10 +42,6 @@
 		<ProjectReference Include="..\..\src\grpc\KetPsi.Endpoints.Grpc\KetPsi.Endpoints.Grpc.csproj" />
 		<ProjectReference Include="..\..\src\grpc\KetPsi.Endpoints.Grpc.Abstractions\KetPsi.Endpoints.Grpc.Abstractions.csproj" />
 		<ProjectReference Include="..\..\src\KetPsi.Endpoints.Abstractions\KetPsi.Endpoints.Abstractions.csproj" />
-		<!--
-		  Analyzer only: ReferenceOutputAssembly=false prevents Microsoft.CodeAnalysis.* from
-		  flowing into this project (which surfaces as TypeInfo / Assembly.CodeBase errors).
-		-->
 		<ProjectReference Include="..\..\src\grpc\KetPsi.Endpoints.Grpc.Generator\KetPsi.Endpoints.Grpc.Generator.csproj"
 		                  OutputItemType="Analyzer"
 		                  ReferenceOutputAssembly="false" />

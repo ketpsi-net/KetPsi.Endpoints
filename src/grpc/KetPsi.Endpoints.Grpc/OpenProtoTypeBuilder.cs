@@ -23,4 +23,7 @@ internal sealed class OpenProtoMetaTypeStub : IOpenProtoMetaType
 {
     public IOpenProtoMetaType Property(string propertyName, int order) => this;
     public IOpenProtoMetaType UseConstrcutor(bool useConstructor) => this;
+    public IOpenProtoMetaType InstantiateWith(string factoryMethodName) => this;
+    public IOpenProtoMetaType InstantiateWith(Type declaringType, string factoryMethodName) => this;
+    public IOpenProtoMetaType InstantiateWith(Delegate @delegate) => this;
 }

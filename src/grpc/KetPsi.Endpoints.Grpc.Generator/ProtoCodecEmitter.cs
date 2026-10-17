@@ -54,8 +54,9 @@ internal static class ProtoCodecEmitter
         sb.AppendLine("        public static void Register() { }");
         sb.AppendLine();
 
+        var factories = BuildFactoryLookup(typeConfigs);
         foreach (var msg in messages.OrderBy(m => m.ClrTypeName, StringComparer.Ordinal))
-            EmitMessageCodec(sb, msg, byClr, compilation);
+            EmitMessageCodec(sb, msg, byClr, compilation, factories);
 
         sb.AppendLine("    }");
         sb.AppendLine("}");
@@ -63,13 +64,67 @@ internal static class ProtoCodecEmitter
         context.AddSource("GeneratedProtoCodecs.g.cs", SourceText.From(sb.ToString(), Encoding.UTF8));
     }
 
-    private static void EmitMessageCodec(StringBuilder sb, MessageShape msg, Dictionary<string, MessageShape> byClr, Compilation compilation)
+    private static Dictionary<string, (string Method, string? DeclaringType)> BuildFactoryLookup(
+        ImmutableArray<TypeConfigModel> typeConfigs)
     {
-        var typeName = msg.ClrTypeName;
-        if (IsForbiddenCodecClrName(typeName))
+        var map = new Dictionary<string, (string Method, string? DeclaringType)>(StringComparer.Ordinal);
+        void Index(string key, string method, string? declaring)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+            map[key] = (method, declaring);
+        }
+
+        foreach (var c in typeConfigs)
+        {
+            if (string.IsNullOrEmpty(c.FactoryMethodName))
+                continue;
+            var key = c.TargetTypeName ?? "";
+            if (string.IsNullOrEmpty(key) || key == "IOpenProtoTypeConfiguration")
+                continue;
+            var method = c.FactoryMethodName!;
+            var declaring = c.FactoryDeclaringTypeName;
+            Index(key, method, declaring);
+
+            // Strip global::
+            var k = key.StartsWith("global::", StringComparison.Ordinal) ? key.Substring(8) : key;
+            Index(k, method, declaring);
+
+            // Simple name ResponseWrapper`1 / ResponseWrapper<>
+            var lastDot = k.LastIndexOf('.');
+            var simple = lastDot >= 0 ? k.Substring(lastDot + 1) : k;
+            Index(simple, method, declaring);
+
+            // Normalize open generic forms: Foo<T> / Foo`1 → Foo`1 and Foo
+            var lt = simple.IndexOf('<');
+            if (lt > 0)
+            {
+                var bare = simple.Substring(0, lt);
+                Index(bare, method, declaring);
+                // count commas for arity approx
+                var arity = 1 + simple.Count(ch => ch == ',');
+                Index(bare + "`" + arity, method, declaring);
+            }
+            var tick = simple.IndexOf('`');
+            if (tick > 0)
+            {
+                Index(simple.Substring(0, tick), method, declaring);
+            }
+        }
+        return map;
+    }
+
+    private static void EmitMessageCodec(
+        StringBuilder sb,
+        MessageShape msg,
+        Dictionary<string, MessageShape> byClr,
+        Compilation compilation,
+        Dictionary<string, (string Method, string? DeclaringType)> factories)
+    {
+        var typeName = GlobalClr(msg.ClrTypeName);
+        if (IsForbiddenCodecClrName(msg.ClrTypeName))
             return;
         var safe = Sanitize(msg.MessageName);
-        var plan = ConstructionAnalyzer.Analyze(compilation, typeName, msg.Fields);
+        var plan = ConstructionAnalyzer.Analyze(compilation, typeName, msg.Fields, factories);
 
         // Write
         sb.AppendLine($"        public static void Write_{safe}(ref ProtoWireWriter writer, {typeName} value)");
@@ -1012,6 +1067,30 @@ internal static class ProtoCodecEmitter
     {
         switch (plan.Kind)
         {
+            case ConstructionKind.Factory:
+            {
+                var args = new List<string>();
+                foreach (var n in plan.CtorParameterPropertyNames)
+                {
+                    var field = fields.FirstOrDefault(x => x.Name == n);
+                    if (field is null)
+                    {
+                        args.Add(LocalName(n));
+                        continue;
+                    }
+                    var expr = CoalesceExpr(field);
+                    // Cast to the property/factory parameter CLR type (fixes Dictionary vs IReadOnlyDictionary nullability, etc.)
+                    var hint = (field.ClrTypeHint ?? "").Trim();
+                    if (!string.IsNullOrEmpty(hint) && hint is not "string" and not "int" and not "bool" and not "long")
+                        expr = $"({hint})({expr})";
+                    args.Add(expr);
+                }
+                var decl = plan.FactoryDeclaringTypeName;
+                if (string.IsNullOrEmpty(decl))
+                    decl = typeName;
+                sb.AppendLine($"            return {decl}.{plan.FactoryMethodName}({string.Join(", ", args)});");
+                break;
+            }
             case ConstructionKind.Constructor:
             {
                 var args = new List<string>();
@@ -1218,7 +1297,8 @@ internal static class ProtoCodecEmitter
         // Second pass: collapse by sanitized message name (Write_NestedItem / Marshaller_NestedItem).
         // Different CLR string forms of the same type must not emit duplicate members.
         var bySafeName = new Dictionary<string, MessageShape>(StringComparer.Ordinal);
-        foreach (var shape in byClr.Values.Where(m => !string.IsNullOrEmpty(m.ClrTypeName) && m.Fields.Count > 0))
+        // Include zero-field messages (empty records/classes used as request/response)
+        foreach (var shape in byClr.Values.Where(m => !string.IsNullOrEmpty(m.ClrTypeName)))
         {
             var safe = Sanitize(shape.MessageName);
             if (!bySafeName.TryGetValue(safe, out var existing))
@@ -1245,15 +1325,19 @@ internal static class ProtoCodecEmitter
         ImmutableArray<ProtoFieldModel> fields, bool isRef)
     {
         clrType = NormalizeClrTypeName(UnwrapTask(clrType));
-        if (string.IsNullOrEmpty(clrType) || fields.IsDefaultOrEmpty) return;
+        if (string.IsNullOrEmpty(clrType)) return;
+        // Empty field list is valid (empty record/class request DTOs still need a Marshaller)
         if (!map.TryGetValue(clrType, out var shape))
         {
             shape = new MessageShape(clrType, string.IsNullOrEmpty(messageName) ? SimpleTypeName(clrType) : messageName, new List<ProtoFieldModel>(), isRef);
             map[clrType] = shape;
         }
-        foreach (var f in fields)
-            if (shape.Fields.All(x => x.Number != f.Number))
-                shape.Fields.Add(f);
+        if (!fields.IsDefaultOrEmpty)
+        {
+            foreach (var f in fields)
+                if (shape.Fields.All(x => x.Number != f.Number))
+                    shape.Fields.Add(f);
+        }
     }
 
     /// <summary>Strip global:: and normalize whitespace so the same type is one dictionary key.</summary>
@@ -1302,6 +1386,23 @@ internal static class ProtoCodecEmitter
         return typeName;
     }
 
+    private static string GlobalClr(string typeName)
+    {
+        if (string.IsNullOrEmpty(typeName)) return typeName;
+        typeName = typeName.Trim();
+        if (typeName.StartsWith("global::", StringComparison.Ordinal))
+            return typeName;
+        // primitives and framework keywords
+        switch (typeName)
+        {
+            case "string": case "bool": case "byte": case "sbyte": case "short": case "ushort":
+            case "int": case "uint": case "long": case "ulong": case "float": case "double":
+            case "decimal": case "char": case "object":
+                return typeName;
+        }
+        return "global::" + typeName.Replace('+', '.');
+    }
+
     private static string Sanitize(string name)
     {
         if (string.IsNullOrEmpty(name)) return "Message";
@@ -1314,7 +1415,8 @@ internal static class ProtoCodecEmitter
     {
         ParameterlessThenSet = 0,
         ObjectInitializer = 1,
-        Constructor = 2
+        Constructor = 2,
+        Factory = 3
     }
 
     private sealed class ConstructionPlan
@@ -1322,15 +1424,21 @@ internal static class ProtoCodecEmitter
         public ConstructionKind Kind { get; }
         public System.Collections.Immutable.ImmutableArray<string> CtorParameterPropertyNames { get; }
         public System.Collections.Generic.HashSet<string> SettableProperties { get; }
+        public string? FactoryMethodName { get; }
+        public string? FactoryDeclaringTypeName { get; }
 
         private ConstructionPlan(
             ConstructionKind kind,
             System.Collections.Immutable.ImmutableArray<string> ctorParams,
-            System.Collections.Generic.HashSet<string> settable)
+            System.Collections.Generic.HashSet<string> settable,
+            string? factoryMethod = null,
+            string? factoryDeclaringType = null)
         {
             Kind = kind;
             CtorParameterPropertyNames = ctorParams;
             SettableProperties = settable;
+            FactoryMethodName = factoryMethod;
+            FactoryDeclaringTypeName = factoryDeclaringType;
         }
 
         public static ConstructionPlan ParameterlessSet(System.Collections.Generic.HashSet<string> settable)
@@ -1341,6 +1449,9 @@ internal static class ProtoCodecEmitter
 
         public static ConstructionPlan Ctor(System.Collections.Immutable.ImmutableArray<string> paramProps)
             => new(ConstructionKind.Constructor, paramProps, new System.Collections.Generic.HashSet<string>());
+
+        public static ConstructionPlan Factory(string methodName, string? declaringType, System.Collections.Immutable.ImmutableArray<string> argProps)
+            => new(ConstructionKind.Factory, argProps, new System.Collections.Generic.HashSet<string>(), methodName, declaringType);
     }
 
     /// <summary>
@@ -1354,9 +1465,17 @@ internal static class ProtoCodecEmitter
         public static ConstructionPlan Analyze(
             Compilation compilation,
             string clrTypeName,
-            System.Collections.Generic.IReadOnlyList<ProtoFieldModel> fields)
+            System.Collections.Generic.IReadOnlyList<ProtoFieldModel> fields,
+            Dictionary<string, (string Method, string? DeclaringType)>? factories = null)
         {
             var fieldNames = fields.Select(f => f.Name).ToList();
+            // Factory from IProtoTypeConfiguration / IOpenProtoTypeConfiguration wins
+            if (factories is not null && TryResolveFactory(clrTypeName, factories, out var facMethod, out var facDecl))
+            {
+                var ordered = fields.OrderBy(f => f.Number).Select(f => f.Name).ToImmutableArray();
+                return ConstructionPlan.Factory(facMethod, facDecl, ordered);
+            }
+
             var type = ResolveType(compilation, clrTypeName);
             if (type is null)
             {
@@ -1450,6 +1569,69 @@ internal static class ProtoCodecEmitter
             }
 
             return ConstructionPlan.ParameterlessSet(new HashSet<string>(fieldNames, StringComparer.Ordinal));
+        }
+
+        private static bool TryResolveFactory(
+            string clrTypeName,
+            Dictionary<string, (string Method, string? DeclaringType)> factories,
+            out string method,
+            out string? declaringType)
+        {
+            method = "";
+            declaringType = null;
+            if (string.IsNullOrEmpty(clrTypeName))
+                return false;
+
+            var candidates = new List<string> { clrTypeName };
+            var n = clrTypeName.Trim();
+            if (n.StartsWith("global::", StringComparison.Ordinal))
+                n = n.Substring("global::".Length);
+            candidates.Add(n);
+
+            // ResponseWrapper<Foo> → ResponseWrapper`1, ResponseWrapper, Namespace.ResponseWrapper`1
+            var lt = n.IndexOf('<');
+            if (lt > 0)
+            {
+                var before = n.Substring(0, lt);
+                var after = n.Substring(lt);
+                var arity = 1 + after.Count(ch => ch == ',');
+                candidates.Add(before + "`" + arity);
+                candidates.Add(before);
+                var dot = before.LastIndexOf('.');
+                if (dot >= 0)
+                {
+                    var bare = before.Substring(dot + 1);
+                    candidates.Add(bare);
+                    candidates.Add(bare + "`" + arity);
+                }
+            }
+
+            var simple = SimpleTypeName(n);
+            if (!string.IsNullOrEmpty(simple))
+            {
+                candidates.Add(simple);
+                var slt = simple.IndexOf('<');
+                if (slt > 0)
+                {
+                    var bare = simple.Substring(0, slt);
+                    candidates.Add(bare);
+                    candidates.Add(bare + "`1");
+                }
+            }
+
+            foreach (var c in candidates)
+            {
+                if (factories.TryGetValue(c, out var fac))
+                {
+                    method = fac.Method;
+                    declaringType = fac.DeclaringType;
+                    // When declaring type is null, call on the concrete closed type name
+                    if (string.IsNullOrEmpty(declaringType))
+                        declaringType = n.StartsWith("global::") ? n : "global::" + n.Replace('+', '.');
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static INamedTypeSymbol? ResolveType(Compilation compilation, string clrTypeName)

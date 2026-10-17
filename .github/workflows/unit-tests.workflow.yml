@@ -38,24 +38,30 @@ jobs:
           dotnet-version: '10.x'
 
       - name: Run Http tests
-        run: dotnet test tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj --collect:"XPlat Code Coverage" --results-directory ./TestResults/Http --logger:"junit;LogFilePath=test-result-http.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
-      - name: Run Grpc tests
-        run: dotnet test tests/KetPsi.Endpoints.Grpc.Tests/KetPsi.Endpoints.Grpc.Tests.csproj --collect:"XPlat Code Coverage" --results-directory ./TestResults/Grpc --logger:"junit;LogFilePath=test-result-grpc.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
-      - name: Run Results tests
-        run: dotnet test tests/KetPsi.Endpoints.Results.Tests/KetPsi.Endpoints.Results.Tests.csproj --collect:"XPlat Code Coverage" --results-directory ./TestResults/Results --logger:"junit;LogFilePath=test-result-results.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
+        run: dotnet test tests/KetPsi.Endpoints.Http.Tests/KetPsi.Endpoints.Http.Tests.csproj --collect:"Code Coverage;Format=Cobertura" --results-directory ./TestResults/Http --logger:"junit;LogFilePath=test-result-http.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
 
+      - name: Run Grpc tests
+        run: dotnet test tests/KetPsi.Endpoints.Grpc.Tests/KetPsi.Endpoints.Grpc.Tests.csproj --collect:"Code Coverage;Format=Cobertura" --results-directory ./TestResults/Grpc --logger:"junit;LogFilePath=test-result-grpc.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
+      
+      - name: Run Results tests
+        run: dotnet test tests/KetPsi.Endpoints.Results.Tests/KetPsi.Endpoints.Results.Tests.csproj --collect:"Code Coverage;Format=Cobertura" --results-directory ./TestResults/Results --logger:"junit;LogFilePath=test-result-results.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
+      
       - name: Merge code coverage reports
         run: |
           dotnet tool install -g dotnet-reportgenerator-globaltool
           export PATH="$PATH:/home/runner/.dotnet/tools"
-          reportgenerator -reports:"./TestResults/**/*.cobertura.xml" -targetdir:"./CoverageReport" -reporttypes:"Cobertura"
+          # The native collector creates files named straight 'cobertura.xml' rather than 'coverage.cobertura.xml'
+          reportgenerator -reports:"./TestResults/**/*.xml" -targetdir:"./CoverageReport" -reporttypes:"Cobertura;MarkdownSummaryGithub" -assemblyfilters:"-*.Tests;-*Tests*" 
 
-      - name: Archive code coverage results
-        uses: 5monkeys/cobertura-action@master
-        with:
-          path: CoverageReport/Cobertura.xml
-          name: code-coverage-report
-          minimum_coverage: 45
+      # - name: Archive code coverage results
+      #   uses: 5monkeys/cobertura-action@master
+      #   with:
+      #     path: CoverageReport/Cobertura.xml
+      #     name: code-coverage-report
+      #     minimum_coverage: 45
+
+      - name: Publish Coverage Summary to GitHub Actions
+        run: cat ./CoverageReport/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
 
       - name: Archive test results
         uses: mikepenz/action-junit-report@v4

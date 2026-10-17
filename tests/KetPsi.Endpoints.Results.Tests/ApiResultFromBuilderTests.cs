@@ -240,7 +240,7 @@ public class ApiResultFromBuilderTests
         var api = ApiResult.From(domain).AsIs();
 
         Assert.Equal(500, api.StatusCode);
-        Assert.Equal(502, api.Errors[0]!.Metadata!["status_code"]);
+        Assert.Equal("502", api.Errors[0]!.Metadata!["status_code"]);
     }
 
     // ───────────────────────────── Async ─────────────────────────────

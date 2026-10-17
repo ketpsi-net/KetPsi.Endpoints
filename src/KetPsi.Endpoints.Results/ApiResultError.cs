@@ -14,7 +14,7 @@ public sealed record ApiResultError(
     string Code,
     string Message,
     string? Title = null,
-    IReadOnlyDictionary<string, object?>? Metadata = null,
+    IReadOnlyDictionary<string, string?>? Metadata = null,
     int? StatusCode = null)
 {
     /// <summary>
@@ -25,6 +25,20 @@ public sealed record ApiResultError(
             error.Code,
             error.Message,
             error.Type.ToString(),
-            error.Metadata,
+            GetMetadata(error.Metadata),
             statusCode ?? error.Type.ToStatusCode());
+
+    private static Dictionary<string, string?>? GetMetadata(IReadOnlyDictionary<string, object?>? errors)
+    {
+        if (errors is null)
+            return null;
+
+        var result = new Dictionary<string, string?>();
+        foreach (var keyValue in errors)
+        {
+            result[keyValue.Key] = keyValue.Value?.ToString();
+        }
+
+        return result;
+    }
 }

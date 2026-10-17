@@ -4,48 +4,54 @@ namespace KetPsi.Endpoints.Grpc;
 
 /// <summary>
 /// Endpoint-level gRPC configuration for a specific handler (interceptors + parameter binding).
-/// Mirrors HTTP's <c>IHttpEndpointConfiguration&lt;TEndpoint&gt;</c>.
+/// Mirrors HTTP's endpoint configuration pattern.
 /// </summary>
+/// <typeparam name="TEndpoint">The endpoint handler type.</typeparam>
 public interface IGrpcEndpointConfiguration<in TEndpoint>
 {
+    /// <summary>Configures interceptors and request binding for <typeparamref name="TEndpoint"/>.</summary>
     void Configure(IGrpcEndpointBuilder<TEndpoint> builder);
 }
 
-/// <summary>
-/// Non-generic marker / interceptor-only configuration (optional).
-/// </summary>
+/// <summary>Non-generic endpoint configuration (interceptors only).</summary>
 public interface IGrpcEndpointConfiguration
 {
+    /// <summary>Configures interceptors for the endpoint.</summary>
     void Configure(IGrpcEndpointBuilder builder);
 }
 
+/// <summary>Fluent builder for endpoint-level gRPC options (interceptors).</summary>
 public interface IGrpcEndpointBuilder
 {
+    /// <summary>Registers a gRPC interceptor type resolved from request services per call.</summary>
     IGrpcEndpointBuilder AddInterceptor<TInterceptor>() where TInterceptor : global::Grpc.Core.Interceptors.Interceptor;
+
+    /// <summary>Registers a gRPC interceptor type resolved from request services per call.</summary>
     IGrpcEndpointBuilder AddInterceptor(Type interceptorType);
 }
 
+/// <summary>Fluent builder for a specific endpoint handler type.</summary>
+/// <typeparam name="TEndpoint">The endpoint handler type.</typeparam>
 public interface IGrpcEndpointBuilder<out TEndpoint> : IGrpcEndpointBuilder
 {
     /// <summary>
-    /// Configures binding sources for the request DTO (headers, path) — not the protobuf wire map.
+    /// Configures binding sources for the request DTO (headers) — not the protobuf wire map.
     /// </summary>
     IGrpcEndpointBuilder<TEndpoint> Request<TRequest>(Action<IGrpcRequestBinder<TRequest>> configure);
 }
 
-/// <summary>
-/// Binds individual request properties from gRPC request headers (metadata).
-/// </summary>
+/// <summary>Binds individual request properties from gRPC metadata headers.</summary>
+/// <typeparam name="TRequest">The request DTO type.</typeparam>
 public interface IGrpcRequestBinder<TRequest>
 {
+    /// <summary>Configures how a property is bound from headers.</summary>
     IGrpcRequestBinder<TRequest> Property<TProp>(
         Expression<Func<TRequest, TProp>> propertySelector,
         Action<IGrpcParameterBuilder<TProp>> configure);
 }
 
-/// <summary>
-/// Parameter binding sources — parallel to HTTP <c>FromHeader</c>.
-/// </summary>
+/// <summary>Parameter binding sources (parallel to HTTP <c>FromHeader</c>).</summary>
+/// <typeparam name="TParam">The property type being bound.</typeparam>
 public interface IGrpcParameterBuilder<TParam>
 {
     /// <summary>
@@ -55,11 +61,16 @@ public interface IGrpcParameterBuilder<TParam>
     IGrpcParameterBuilder<TParam> FromHeader(string? name = null);
 }
 
-public class GrpcEndpointBuilder : IGrpcEndpointBuilder
+/// <summary>Runtime builder implementation used by <c>MapGrpc</c> configure callbacks and the generator.</summary>
+internal class GrpcEndpointBuilder : IGrpcEndpointBuilder
 {
+    /// <summary>Interceptor types discovered at configure time.</summary>
     public List<Type> InterceptorTypes { get; } = new();
+
+    /// <summary>Header binding registrations discovered at configure time.</summary>
     public List<GrpcBindingRegistration> Bindings { get; } = new();
 
+    /// <inheritdoc />
     public IGrpcEndpointBuilder AddInterceptor<TInterceptor>()
         where TInterceptor : global::Grpc.Core.Interceptors.Interceptor
     {
@@ -67,6 +78,7 @@ public class GrpcEndpointBuilder : IGrpcEndpointBuilder
         return this;
     }
 
+    /// <inheritdoc />
     public IGrpcEndpointBuilder AddInterceptor(Type interceptorType)
     {
         if (interceptorType is null)
@@ -79,8 +91,10 @@ public class GrpcEndpointBuilder : IGrpcEndpointBuilder
     }
 }
 
-public sealed class GrpcEndpointBuilder<TEndpoint> : GrpcEndpointBuilder, IGrpcEndpointBuilder<TEndpoint>
+/// <summary>Typed endpoint builder used by <c>MapGrpc&lt;T&gt;</c> configure lambdas.</summary>
+internal sealed class GrpcEndpointBuilder<TEndpoint> : GrpcEndpointBuilder, IGrpcEndpointBuilder<TEndpoint>
 {
+    /// <inheritdoc />
     public IGrpcEndpointBuilder<TEndpoint> Request<TRequest>(Action<IGrpcRequestBinder<TRequest>> configure)
     {
         var binder = new GrpcRequestBinder<TRequest>(Bindings);
@@ -89,12 +103,14 @@ public sealed class GrpcEndpointBuilder<TEndpoint> : GrpcEndpointBuilder, IGrpcE
     }
 }
 
-public sealed class GrpcRequestBinder<TRequest> : IGrpcRequestBinder<TRequest>
+/// <summary>Collects <see cref="FromHeader"/> bindings for a request DTO.</summary>
+internal sealed class GrpcRequestBinder<TRequest> : IGrpcRequestBinder<TRequest>
 {
     private readonly List<GrpcBindingRegistration> _bindings;
 
     public GrpcRequestBinder(List<GrpcBindingRegistration> bindings) => _bindings = bindings;
 
+    /// <inheritdoc />
     public IGrpcRequestBinder<TRequest> Property<TProp>(
         Expression<Func<TRequest, TProp>> propertySelector,
         Action<IGrpcParameterBuilder<TProp>> configure)
@@ -125,7 +141,8 @@ public sealed class GrpcRequestBinder<TRequest> : IGrpcRequestBinder<TRequest>
     }
 }
 
-public sealed class GrpcParameterBuilder<TParam> : IGrpcParameterBuilder<TParam>
+/// <summary>Fluent parameter source builder for a single property.</summary>
+internal sealed class GrpcParameterBuilder<TParam> : IGrpcParameterBuilder<TParam>
 {
     public string PropertyName { get; }
     public GrpcBindingSource Source { get; private set; } = GrpcBindingSource.None;
@@ -133,6 +150,7 @@ public sealed class GrpcParameterBuilder<TParam> : IGrpcParameterBuilder<TParam>
 
     public GrpcParameterBuilder(string propertyName) => PropertyName = propertyName;
 
+    /// <inheritdoc />
     public IGrpcParameterBuilder<TParam> FromHeader(string? name = null)
     {
         Source = GrpcBindingSource.Header;
@@ -141,15 +159,35 @@ public sealed class GrpcParameterBuilder<TParam> : IGrpcParameterBuilder<TParam>
     }
 }
 
+/// <summary>Where a request property is bound from at call time.</summary>
 public enum GrpcBindingSource
 {
+    /// <summary>Not bound from metadata.</summary>
     None = 0,
-    Header = 1
+    /// <summary>Bound from a gRPC/HTTP2 header.</summary>
+    Header = 1,
 }
 
-public sealed record GrpcBindingRegistration(
-    Type RequestType,
-    string PropertyName,
-    GrpcBindingSource Source,
-    string? Key,
-    Type PropertyType);
+/// <summary>One property binding discovered from endpoint configuration.</summary>
+internal sealed class GrpcBindingRegistration
+{
+    public Type RequestType { get; }
+    public string PropertyName { get; }
+    public GrpcBindingSource Source { get; }
+    public string? Key { get; }
+    public Type PropertyType { get; }
+
+    public GrpcBindingRegistration(
+        Type requestType,
+        string propertyName,
+        GrpcBindingSource source,
+        string? key,
+        Type propertyType)
+    {
+        RequestType = requestType;
+        PropertyName = propertyName;
+        Source = source;
+        Key = key;
+        PropertyType = propertyType;
+    }
+}
