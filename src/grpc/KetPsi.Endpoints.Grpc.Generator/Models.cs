@@ -12,13 +12,19 @@ internal sealed class TypeConfigModel
     public System.Collections.Immutable.ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> MetadataBindings { get; }
     /// <summary>Fully-qualified interceptor type names from AddInterceptor&lt;T&gt;().</summary>
     public System.Collections.Immutable.ImmutableArray<string> Interceptors { get; }
+    /// <summary>Static factory method name for deserialization (InstantiateWith).</summary>
+    public string? FactoryMethodName { get; }
+    /// <summary>Optional declaring type FQN when factory is not on the target type.</summary>
+    public string? FactoryDeclaringTypeName { get; }
 
     public TypeConfigModel(
         string configClassName,
         string targetTypeName,
         System.Collections.Immutable.ImmutableArray<(string Name, int Number)> fields = default,
         System.Collections.Immutable.ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> metadataBindings = default,
-        System.Collections.Immutable.ImmutableArray<string> interceptors = default)
+        System.Collections.Immutable.ImmutableArray<string> interceptors = default,
+        string? factoryMethodName = null,
+        string? factoryDeclaringTypeName = null)
     {
         ConfigClassName = configClassName;
         TargetTypeName = targetTypeName;
@@ -29,6 +35,8 @@ internal sealed class TypeConfigModel
         Interceptors = interceptors.IsDefault
             ? System.Collections.Immutable.ImmutableArray<string>.Empty
             : interceptors;
+        FactoryMethodName = factoryMethodName;
+        FactoryDeclaringTypeName = factoryDeclaringTypeName;
     }
 }
 

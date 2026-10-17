@@ -251,6 +251,46 @@ public sealed class GetUserRequestConfig : IProtoTypeConfiguration<GetUserReques
 
 Field numbers drive schema emission and pure wire codecs at compile time.
 
+### Custom factory (`InstantiateWith`)
+
+Prefer a **public constructor** for simple DTOs. For domain types with **internal constructors** and static factories, use `InstantiateWith` so the generated reader does not call `new T()` + property setters.
+
+**Preferred (method group / `Delegate`)** — same idea as Minimal APIs:
+
+```csharp
+public sealed class ApiResultConfiguration : IOpenProtoTypeConfiguration
+{
+    public void Configure(IOpenProtoTypeBuilder builder)
+    {
+        builder.ConfigureGeneric(typeof(ResponseWrapper<>), config => config
+            .Property("Status", 1)
+            .Property("Value", 2)
+            .InstantiateWith(ResponseWrapper<object>.Create)); // method group
+    }
+}
+```
+
+```csharp
+// Closed type
+builder.Property(x => x.Id, 1)
+       .Property(x => x.Name, 2)
+       .InstantiateWith(OrderDto.Create);
+```
+
+**Also supported**
+
+```csharp
+.InstantiateWith("Create")
+.InstantiateWith(nameof(ResponseWrapper<>.Create))
+.InstantiateWith(typeof(Helper), "Create")
+```
+
+The deserializer calls the factory with property values in **field-number order**. The method must be **static** and accessible from generated code. Generated shape:
+
+```csharp
+return global::MyApp.ResponseWrapper<T>.Create(__p_Status, __p_Value);
+```
+
 ---
 
 ## Package layout

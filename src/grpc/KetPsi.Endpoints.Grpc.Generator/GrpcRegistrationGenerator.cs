@@ -1022,20 +1022,21 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
 
                     if (i.Name.Contains("IProtoTypeConfiguration") && i.TypeArguments.Length > 0)
                     {
-                        var (fields, metadata) = ExtractConfigMaps(symbol, i.TypeArguments[0]);
+                        var (fields, metadata, factoryMethod, factoryDeclaring) = ExtractConfigMaps(symbol, i.TypeArguments[0]);
                         TypeConfigs.Add(new TypeConfigModel(
                             symbol.ToDisplayString(_fqnFormat),
                             i.TypeArguments[0].ToDisplayString(_fqnFormat),
                             fields,
-                            metadata));
+                            metadata,
+                            factoryMethodName: factoryMethod,
+                            factoryDeclaringTypeName: factoryDeclaring));
                         break;
                     }
 
                     if (i.Name.Contains("IOpenProtoTypeConfiguration"))
                     {
-                        TypeConfigs.Add(new TypeConfigModel(
-                            symbol.ToDisplayString(_fqnFormat),
-                            "IOpenProtoTypeConfiguration"));
+                        foreach (var openCfg in ExtractOpenGenericConfigs(symbol))
+                            TypeConfigs.Add(openCfg);
                         break;
                     }
                 }
@@ -1077,15 +1078,103 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
             return list.ToImmutableArray();
         }
 
-        private static (ImmutableArray<(string Name, int Number)> Fields, ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> Metadata) ExtractConfigMaps(INamedTypeSymbol configClass, ITypeSymbol? targetType)
-        {
-            var fields = new List<(string Name, int Number)>();
-            var metadata = new List<(string Name, string Source, string Key, string ClrTypeHint)>();
 
+
+        /// <summary>
+        /// Parses InstantiateWith(string), InstantiateWith(Type, string), InstantiateWith(nameof(...)),
+        /// or InstantiateWith(SomeType.Factory) method-group / Delegate argument.
+        /// </summary>
+        private void ParseInstantiateWithInvocation(
+            InvocationExpressionSyntax inv,
+            SemanticModel model,
+            ref string? factoryMethod,
+            ref string? factoryDeclaring)
+        {
+            if (inv.ArgumentList.Arguments.Count == 0)
+                return;
+
+            var a0 = inv.ArgumentList.Arguments[0].Expression;
+
+            // InstantiateWith("Create")
+            if (a0 is LiteralExpressionSyntax lit &&
+                lit.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralExpression))
+            {
+                factoryMethod = lit.Token.ValueText;
+                factoryDeclaring = null;
+                if (inv.ArgumentList.Arguments.Count >= 2 &&
+                    inv.ArgumentList.Arguments[1].Expression is LiteralExpressionSyntax lit2 &&
+                    inv.ArgumentList.Arguments[0].Expression is TypeOfExpressionSyntax)
+                {
+                    // shouldn't happen — string first
+                }
+                return;
+            }
+
+            // InstantiateWith(typeof(Helper), "Create")
+            if (inv.ArgumentList.Arguments.Count >= 2 &&
+                a0 is TypeOfExpressionSyntax toe &&
+                inv.ArgumentList.Arguments[1].Expression is LiteralExpressionSyntax litName)
+            {
+                factoryMethod = litName.Token.ValueText;
+                factoryDeclaring = model.GetTypeInfo(toe.Type).Type?
+                    .ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                return;
+            }
+
+            // InstantiateWith(nameof(ResponseWrapper<>.Create)) or nameof(Type.Create)
+            if (a0 is InvocationExpressionSyntax nameofInv)
+            {
+                var exprText = nameofInv.Expression.ToString();
+                if (exprText == "nameof" || exprText.EndsWith(".nameof", StringComparison.Ordinal))
+                {
+                    if (nameofInv.ArgumentList.Arguments.Count > 0)
+                    {
+                        var target = nameofInv.ArgumentList.Arguments[0].Expression.ToString();
+                        factoryMethod = target.Split('.').Last().Trim();
+                        factoryDeclaring = null;
+                    }
+                    return;
+                }
+            }
+
+            // InstantiateWith(Type.Create) / method group → Delegate
+            var symbol = model.GetSymbolInfo(a0).Symbol
+                         ?? model.GetSymbolInfo(a0).CandidateSymbols.FirstOrDefault();
+            if (symbol is IMethodSymbol method)
+            {
+                factoryMethod = method.Name;
+                factoryDeclaring = method.ContainingType?
+                    .ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                // For open generic method on ResponseWrapper<T>, ContainingType may be ResponseWrapper<T>
+                // Prefer calling on the concrete closed type at emit time when declaring is the open def
+                if (method.ContainingType is { IsGenericType: true } gt && gt.IsDefinition == false)
+                {
+                    // constructed — ok
+                }
+                else if (method.ContainingType is { IsGenericType: true } openGt && openGt.IsDefinition)
+                {
+                    // leave declaring null so emit uses concrete closed typeName
+                    factoryDeclaring = null;
+                }
+                return;
+            }
+
+            // Fallback: MemberAccess ...Create
+            if (a0 is MemberAccessExpressionSyntax ma)
+            {
+                factoryMethod = ma.Name.Identifier.Text;
+                factoryDeclaring = null;
+            }
+        }
+
+        private List<TypeConfigModel> ExtractOpenGenericConfigs(INamedTypeSymbol configClass)
+        {
+            var results = new List<TypeConfigModel>();
             foreach (var syntaxRef in configClass.DeclaringSyntaxReferences)
             {
                 if (syntaxRef.GetSyntax() is not TypeDeclarationSyntax typeDecl)
                     continue;
+                var model = _compilation.GetSemanticModel(syntaxRef.SyntaxTree);
 
                 foreach (var invocation in typeDecl.DescendantNodes().OfType<InvocationExpressionSyntax>())
                 {
@@ -1095,8 +1184,117 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
                         IdentifierNameSyntax id => id.Identifier.Text,
                         _ => null
                     };
+                    if (methodName != "ConfigureGeneric" || invocation.ArgumentList.Arguments.Count < 2)
+                        continue;
+                    if (invocation.ArgumentList.Arguments[0].Expression is not TypeOfExpressionSyntax toe)
+                        continue;
+                    var openType = model.GetTypeInfo(toe.Type).Type as INamedTypeSymbol;
+                    if (openType is null)
+                        continue;
 
-                    if (methodName is null || invocation.ArgumentList.Arguments.Count < 2)
+                    var fields = new List<(string Name, int Number)>();
+                    string? factoryMethod = null;
+                    string? factoryDeclaring = null;
+
+                    SyntaxNode? body = invocation.ArgumentList.Arguments[1].Expression switch
+                    {
+                        SimpleLambdaExpressionSyntax s => (SyntaxNode?)s.Body,
+                        ParenthesizedLambdaExpressionSyntax pl => pl.Body,
+                        _ => null
+                    };
+                    if (body is null)
+                        continue;
+
+                    foreach (var inv in body.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
+                    {
+                        var mn = inv.Expression switch
+                        {
+                            MemberAccessExpressionSyntax ma => ma.Name.Identifier.Text,
+                            IdentifierNameSyntax id => id.Identifier.Text,
+                            _ => null
+                        };
+                        if (mn == "Property" && inv.ArgumentList.Arguments.Count >= 2)
+                        {
+                            var a0 = inv.ArgumentList.Arguments[0].Expression;
+                            string? propName = null;
+                            if (a0 is LiteralExpressionSyntax lp && lp.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.StringLiteralExpression))
+                                propName = lp.Token.ValueText;
+                            else
+                            {
+                                var txt = a0.ToString();
+                                if (txt.Contains("nameof"))
+                                    propName = txt.Replace("nameof", "").Replace("(", "").Replace(")", "").Trim().Split('.').Last();
+                            }
+                            if (propName is not null &&
+                                inv.ArgumentList.Arguments[1].Expression is LiteralExpressionSyntax ln &&
+                                int.TryParse(ln.Token.ValueText, out var num))
+                                fields.Add((propName, num));
+                        }
+                        else if (mn == "InstantiateWith")
+                        {
+                            ParseInstantiateWithInvocation(inv, model, ref factoryMethod, ref factoryDeclaring);
+                        }
+                    }
+
+                    var def = openType.OriginalDefinition;
+                    var display = def.ToDisplayString();
+                    results.Add(new TypeConfigModel(
+                        configClass.ToDisplayString(_fqnFormat),
+                        display,
+                        fields.ToImmutableArray(),
+                        factoryMethodName: factoryMethod,
+                        factoryDeclaringTypeName: factoryDeclaring));
+
+                    var tick = (def.ContainingNamespace is { IsGlobalNamespace: false } ns
+                        ? ns.ToDisplayString() + "."
+                        : "") + def.Name + "`" + def.Arity;
+                    if (!string.Equals(tick, display, StringComparison.Ordinal))
+                    {
+                        results.Add(new TypeConfigModel(
+                            configClass.ToDisplayString(_fqnFormat),
+                            tick,
+                            fields.ToImmutableArray(),
+                            factoryMethodName: factoryMethod,
+                            factoryDeclaringTypeName: factoryDeclaring));
+                    }
+                }
+            }
+            return results;
+        }
+
+        private (ImmutableArray<(string Name, int Number)> Fields, ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> Metadata, string? FactoryMethod, string? FactoryDeclaringType) ExtractConfigMaps(INamedTypeSymbol configClass, ITypeSymbol? targetType)
+        {
+            var fields = new List<(string Name, int Number)>();
+            var metadata = new List<(string Name, string Source, string Key, string ClrTypeHint)>();
+            string? factoryMethod = null;
+            string? factoryDeclaring = null;
+
+            foreach (var syntaxRef in configClass.DeclaringSyntaxReferences)
+            {
+                if (syntaxRef.GetSyntax() is not TypeDeclarationSyntax typeDecl)
+                    continue;
+
+                var model = _compilation.GetSemanticModel(syntaxRef.SyntaxTree);
+
+                foreach (var invocation in typeDecl.DescendantNodes().OfType<InvocationExpressionSyntax>())
+                {
+                    var methodName = invocation.Expression switch
+                    {
+                        MemberAccessExpressionSyntax ma => ma.Name is GenericNameSyntax gn ? gn.Identifier.Text : ma.Name.Identifier.Text,
+                        IdentifierNameSyntax id => id.Identifier.Text,
+                        _ => null
+                    };
+
+                    if (methodName is null)
+                        continue;
+
+                    if (methodName == "InstantiateWith")
+                    {
+                        ParseInstantiateWithInvocation(invocation, model, ref factoryMethod, ref factoryDeclaring);
+                        continue;
+                    }
+
+                    if (invocation.ArgumentList.Arguments.Count < 2)
                         continue;
 
                     var propName = TryReadPropertyName(invocation.ArgumentList.Arguments[0].Expression);
@@ -1112,11 +1310,10 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
                             continue;
                         fields.Add((propName, number));
                     }
-
                 }
             }
 
-            return (fields.ToImmutableArray(), metadata.ToImmutableArray());
+            return (fields.ToImmutableArray(), metadata.ToImmutableArray(), factoryMethod, factoryDeclaring);
         }
 
         private static string? TryReadPropertyName(ExpressionSyntax firstArg)
