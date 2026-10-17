@@ -181,7 +181,7 @@ Do **not** model bearer tokens as protobuf fields unless you intentionally want 
 
 ---
 
-## Header binding (`FromHeader`)
+## Metadata binding (`FromMetadata`)
 
 Bind request DTO properties from gRPC metadata (not from the wire message). Configure on **`IGrpcEndpointConfiguration<TEndpoint>`**, not on `IProtoTypeConfiguration`.
 
@@ -192,8 +192,8 @@ public sealed class CreateOrderConfig : IGrpcEndpointConfiguration<CreateOrderHa
     {
         builder.Request<CreateOrderRequest>(req =>
         {
-            req.Property(x => x.TenantId, p => p.FromHeader("x-tenant-id"));
-            req.Property(x => x.TraceId, p => p.FromHeader()); // key = property name
+            req.Property(x => x.TenantId, p => p.FromMetadata("x-tenant-id"));
+            req.Property(x => x.TraceId, p => p.FromMetadata()); // key = property name
         });
     }
 }

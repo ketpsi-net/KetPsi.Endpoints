@@ -10,7 +10,7 @@ using Xunit;
 
 namespace KetPsi.Endpoints.Grpc.Tests;
 
-public class FromHeaderPathAndInterceptorTests
+public class FromMetadataPathAndInterceptorTests
 {
     private sealed class SampleRequest
     {
@@ -28,8 +28,8 @@ public class FromHeaderPathAndInterceptorTests
             builder.AddInterceptor<NoOpInterceptor>();
             builder.Request<SampleRequest>(req =>
             {
-                req.Property(x => x.TenantId, p => p.FromHeader("x-tenant-id"));
-                req.Property(x => x.TraceId, p => p.FromHeader());
+                req.Property(x => x.TenantId, p => p.FromMetadata("x-tenant-id"));
+                req.Property(x => x.TraceId, p => p.FromMetadata());
                 
                 
                 
@@ -46,15 +46,15 @@ public class FromHeaderPathAndInterceptorTests
     }
 
     [Fact]
-    public void EndpointConfig_FromHeaderAndFromPath_IsFluent()
+    public void EndpointConfig_FromMetadataAndFromPath_IsFluent()
     {
         var builder = new GrpcEndpointBuilder<GetUserByIdHandler>();
         builder.Request<SampleRequest>(req =>
         {
-            req.Property(x => x.TenantId, p => p.FromHeader("x-tenant-id"));
+            req.Property(x => x.TenantId, p => p.FromMetadata("x-tenant-id"));
         });
         Assert.Equal(1, builder.Bindings.Count);
-        Assert.Contains(builder.Bindings, b => b.Source == GrpcBindingSource.Header && b.Key == "x-tenant-id");
+        Assert.Contains(builder.Bindings, b => b.Source == GrpcBindingSource.Metadata && b.Key == "x-tenant-id");
         
         
     }
