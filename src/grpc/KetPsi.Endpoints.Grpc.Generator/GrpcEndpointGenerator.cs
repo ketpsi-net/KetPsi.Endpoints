@@ -220,7 +220,7 @@ public sealed class GrpcEndpointGenerator : IIncrementalGenerator
         if (executeMethod is not null)
         {
             if (executeMethod.Parameters.Length > 0)
-                requestTypeString = executeMethod.Parameters[0].Type.ToDisplayString();
+                requestTypeString = executeMethod.Parameters[0].Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
             if (executeMethod.Parameters.Length > 1 &&
                 executeMethod.Parameters[1].Type.Name == "CancellationToken")
@@ -228,12 +228,12 @@ public sealed class GrpcEndpointGenerator : IIncrementalGenerator
                 acceptsCancellationToken = true;
             }
 
-            returnTypeString = executeMethod.ReturnType.ToDisplayString();
+            returnTypeString = executeMethod.ReturnType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         }
 
         return new GrpcEndpointModel(
             handlerType.Name,
-            handlerType.ToDisplayString(),
+            handlerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
             requestTypeString,
             returnTypeString,
             finalGrpcRoute,
@@ -272,7 +272,7 @@ public sealed class GrpcEndpointGenerator : IIncrementalGenerator
 
             // 1. Service interface
             sb.AppendLine($"    [ServiceContract(Name = \"{serviceRoute}\")]");
-            sb.AppendLine($"    public interface I{sanitizedServiceName}_Contract");
+            sb.AppendLine($"    internal interface I{sanitizedServiceName}_Contract");
             sb.AppendLine("    {");
             foreach (var method in methods)
             {
@@ -291,7 +291,7 @@ public sealed class GrpcEndpointGenerator : IIncrementalGenerator
             sb.AppendLine();
 
             // 2. Proxy class
-            sb.AppendLine($"    public class {sanitizedServiceName}_Proxy : I{sanitizedServiceName}_Contract");
+            sb.AppendLine($"    internal class {sanitizedServiceName}_Proxy : I{sanitizedServiceName}_Contract");
             sb.AppendLine("    {");
 
             var distinctHandlers = methods.Select(m => m.HandlerFullyQualifiedName).Distinct().ToList();
