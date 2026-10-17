@@ -120,8 +120,8 @@ internal static class ProtoCodecEmitter
         Compilation compilation,
         Dictionary<string, (string Method, string? DeclaringType)> factories)
     {
-        var typeName = msg.ClrTypeName;
-        if (IsForbiddenCodecClrName(typeName))
+        var typeName = GlobalClr(msg.ClrTypeName);
+        if (IsForbiddenCodecClrName(msg.ClrTypeName))
             return;
         var safe = Sanitize(msg.MessageName);
         var plan = ConstructionAnalyzer.Analyze(compilation, typeName, msg.Fields, factories);
@@ -1073,12 +1073,21 @@ internal static class ProtoCodecEmitter
                 foreach (var n in plan.CtorParameterPropertyNames)
                 {
                     var field = fields.FirstOrDefault(x => x.Name == n);
-                    args.Add(field is null ? LocalName(n) : CoalesceExpr(field));
+                    if (field is null)
+                    {
+                        args.Add(LocalName(n));
+                        continue;
+                    }
+                    var expr = CoalesceExpr(field);
+                    // Cast to the property/factory parameter CLR type (fixes Dictionary vs IReadOnlyDictionary nullability, etc.)
+                    var hint = (field.ClrTypeHint ?? "").Trim();
+                    if (!string.IsNullOrEmpty(hint) && hint is not "string" and not "int" and not "bool" and not "long")
+                        expr = $"({hint})({expr})";
+                    args.Add(expr);
                 }
                 var decl = plan.FactoryDeclaringTypeName;
                 if (string.IsNullOrEmpty(decl))
                     decl = typeName;
-                // Prefer closed type's static method; declaring type may be open/helper FQN
                 sb.AppendLine($"            return {decl}.{plan.FactoryMethodName}({string.Join(", ", args)});");
                 break;
             }
@@ -1288,7 +1297,8 @@ internal static class ProtoCodecEmitter
         // Second pass: collapse by sanitized message name (Write_NestedItem / Marshaller_NestedItem).
         // Different CLR string forms of the same type must not emit duplicate members.
         var bySafeName = new Dictionary<string, MessageShape>(StringComparer.Ordinal);
-        foreach (var shape in byClr.Values.Where(m => !string.IsNullOrEmpty(m.ClrTypeName) && m.Fields.Count > 0))
+        // Include zero-field messages (empty records/classes used as request/response)
+        foreach (var shape in byClr.Values.Where(m => !string.IsNullOrEmpty(m.ClrTypeName)))
         {
             var safe = Sanitize(shape.MessageName);
             if (!bySafeName.TryGetValue(safe, out var existing))
@@ -1315,15 +1325,19 @@ internal static class ProtoCodecEmitter
         ImmutableArray<ProtoFieldModel> fields, bool isRef)
     {
         clrType = NormalizeClrTypeName(UnwrapTask(clrType));
-        if (string.IsNullOrEmpty(clrType) || fields.IsDefaultOrEmpty) return;
+        if (string.IsNullOrEmpty(clrType)) return;
+        // Empty field list is valid (empty record/class request DTOs still need a Marshaller)
         if (!map.TryGetValue(clrType, out var shape))
         {
             shape = new MessageShape(clrType, string.IsNullOrEmpty(messageName) ? SimpleTypeName(clrType) : messageName, new List<ProtoFieldModel>(), isRef);
             map[clrType] = shape;
         }
-        foreach (var f in fields)
-            if (shape.Fields.All(x => x.Number != f.Number))
-                shape.Fields.Add(f);
+        if (!fields.IsDefaultOrEmpty)
+        {
+            foreach (var f in fields)
+                if (shape.Fields.All(x => x.Number != f.Number))
+                    shape.Fields.Add(f);
+        }
     }
 
     /// <summary>Strip global:: and normalize whitespace so the same type is one dictionary key.</summary>
@@ -1370,6 +1384,23 @@ internal static class ProtoCodecEmitter
             }
         }
         return typeName;
+    }
+
+    private static string GlobalClr(string typeName)
+    {
+        if (string.IsNullOrEmpty(typeName)) return typeName;
+        typeName = typeName.Trim();
+        if (typeName.StartsWith("global::", StringComparison.Ordinal))
+            return typeName;
+        // primitives and framework keywords
+        switch (typeName)
+        {
+            case "string": case "bool": case "byte": case "sbyte": case "short": case "ushort":
+            case "int": case "uint": case "long": case "ulong": case "float": case "double":
+            case "decimal": case "char": case "object":
+                return typeName;
+        }
+        return "global::" + typeName.Replace('+', '.');
     }
 
     private static string Sanitize(string name)

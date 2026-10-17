@@ -45,7 +45,7 @@ public sealed class GetUserByIdHandler : IEndpoint
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddGrpc();
-builder.Services.AddGrpcServices();   // generated
+builder.Services.AddGrpcServices();   // aggregates all MapGrpc assemblies via hub
 builder.Services.AddProtoEndpoint();  // optional options hook
 
 var app = builder.Build();
@@ -53,6 +53,7 @@ var app = builder.Build();
 app.MapGrpc<GetUserByIdHandler>("Users/GetById");
 app.MapGrpcEndpoints();               // generated
 app.UseProtoEndpoint();               // optional GET /proto
+
 
 app.Run();
 ```
@@ -293,6 +294,27 @@ return global::MyApp.ResponseWrapper<T>.Create(__p_Status, __p_Value);
 
 ---
 
+## Registration (single host API)
+
+Always call:
+
+```csharp
+services.AddGrpcServices();
+app.MapGrpcEndpoints();
+app.UseProtoEndpoint();   // optional GET /proto
+```
+
+These extension methods live in the **runtime** package. Each project that contains **`MapGrpc`** emits a module initializer under `KetPsi.Endpoints.Grpc.Generated.{Assembly}` and registers with `GrpcGeneratedRegistrationHub`. The host methods apply **all** registered assemblies.
+
+| Project | Generates registration? |
+|---------|-------------------------|
+| Contains `MapGrpc<...>(...)` | Yes (internal, per-assembly) |
+| Only references the package | **No** |
+
+Prefer all `MapGrpc` calls in the **host** so `/proto` is mapped once.
+
+---
+
 ## Package layout
 
 | Package | Role |
@@ -319,3 +341,31 @@ Target frameworks: `net8.0`, `net9.0`, `net10.0`.
 - Prefer `WithGroupName` for **API version** in the proto package; keep `MapGroup` paths for hierarchical naming.
 - Fluent `MapGroup(...).WithGroupName(...).MapGrpc(...)` or `var group = ...` are both supported for group discovery.
 - Authentication is pipeline-based; header binding is for business metadata, not a replacement for `UseAuthentication`.
+
+
+## Coverage / ReportGenerator
+
+The test project references **both** `coverlet.msbuild` and `coverlet.collector`. Using both can produce empty or conflicting coverage files. Prefer **one**:
+
+```bash
+# Recommended: collector only
+dotnet test tests/KetPsi.Endpoints.Grpc.Tests \
+  --collect:"XPlat Code Coverage" \
+  --results-directory ./TestResults
+
+reportgenerator \
+  -reports:./TestResults/**/coverage.cobertura.xml \
+  -targetdir:./CoverageReport \
+  -reporttypes:Html
+```
+
+Common ReportGenerator issues with this solution:
+
+| Issue | Cause / fix |
+|-------|-------------|
+| Empty report | Do not combine `coverlet.msbuild` (`CollectCoverage=true`) with the XPlat collector in the same run |
+| 0% on Grpc package | Add `--settings` or `/p:Include="[KetPsi.Endpoints.Grpc]*"` — by default generated and test assemblies dominate |
+| No cobertura file | `OutputType=Exe` on the test host can confuse some runners; use `--collect:"XPlat Code Coverage"` and check `TestResults/**/coverage.cobertura.xml` |
+| Missing branch data | Use `coverlet.collector` 6+ and `coverage.cobertura.xml`, not `coverage.json` alone |
+
+Remove `coverlet.msbuild` from the test `.csproj` if you standardize on the collector + ReportGenerator pipeline.
