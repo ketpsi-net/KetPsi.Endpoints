@@ -50,7 +50,7 @@ public interface IGrpcRequestBinder<TRequest>
         Action<IGrpcParameterBuilder<TProp>> configure);
 }
 
-/// <summary>Parameter binding sources (parallel to HTTP <c>FromHeader</c>).</summary>
+/// <summary>Parameter binding sources (parallel to HTTP <c>FromMetadata</c>).</summary>
 /// <typeparam name="TParam">The property type being bound.</typeparam>
 public interface IGrpcParameterBuilder<TParam>
 {
@@ -58,7 +58,7 @@ public interface IGrpcParameterBuilder<TParam>
     /// Bind from an HTTP/2 / gRPC request header (metadata entry).
     /// When <paramref name="name"/> is null, the property name is used as the header key.
     /// </summary>
-    IGrpcParameterBuilder<TParam> FromHeader(string? name = null);
+    IGrpcParameterBuilder<TParam> FromMetadata(string? name = null);
 }
 
 /// <summary>Runtime builder implementation used by <c>MapGrpc</c> configure callbacks and the generator.</summary>
@@ -103,7 +103,7 @@ internal sealed class GrpcEndpointBuilder<TEndpoint> : GrpcEndpointBuilder, IGrp
     }
 }
 
-/// <summary>Collects <see cref="FromHeader"/> bindings for a request DTO.</summary>
+/// <summary>Collects <see cref="FromMetadata"/> bindings for a request DTO.</summary>
 internal sealed class GrpcRequestBinder<TRequest> : IGrpcRequestBinder<TRequest>
 {
     private readonly List<GrpcBindingRegistration> _bindings;
@@ -151,9 +151,9 @@ internal sealed class GrpcParameterBuilder<TParam> : IGrpcParameterBuilder<TPara
     public GrpcParameterBuilder(string propertyName) => PropertyName = propertyName;
 
     /// <inheritdoc />
-    public IGrpcParameterBuilder<TParam> FromHeader(string? name = null)
+    public IGrpcParameterBuilder<TParam> FromMetadata(string? name = null)
     {
-        Source = GrpcBindingSource.Header;
+        Source = GrpcBindingSource.Metadata;
         Key = name ?? PropertyName;
         return this;
     }
@@ -164,8 +164,8 @@ public enum GrpcBindingSource
 {
     /// <summary>Not bound from metadata.</summary>
     None = 0,
-    /// <summary>Bound from a gRPC/HTTP2 header.</summary>
-    Header = 1,
+    /// <summary>Bound from gRPC request metadata (HTTP/2 headers).</summary>
+    Metadata = 1,
 }
 
 /// <summary>One property binding discovered from endpoint configuration.</summary>

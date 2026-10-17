@@ -17,6 +17,7 @@ public ref struct ProtoWireReader
     public bool IsAtEnd => _pos >= _data.Length;
     /// <summary>Current read offset.</summary>
     public int Position => _pos;
+    /// <summary>Total buffer length in bytes.</summary>
     public int Length => _data.Length;
 
     /// <summary>Reads the next field tag, or returns false at end of buffer.</summary>
@@ -57,11 +58,16 @@ public ref struct ProtoWireReader
     /// <summary>int32 on the wire is a varint; negatives are sign-extended to 64 bits.</summary>
     public int ReadInt32() => unchecked((int)(long)ReadVarint64());
 
+    /// <summary>Reads a signed int64 varint.</summary>
     public long ReadInt64() => unchecked((long)ReadVarint64());
+    /// <summary>Reads an unsigned int32 varint.</summary>
     public uint ReadUInt32() => unchecked((uint)ReadVarint64());
+    /// <summary>Reads an unsigned int64 varint.</summary>
     public ulong ReadUInt64() => ReadVarint64();
+    /// <summary>Reads a bool as a 0/1 varint.</summary>
     public bool ReadBool() => ReadVarint64() != 0;
 
+    /// <summary>Reads a little-endian fixed32 (4 bytes).</summary>
     public uint ReadFixed32()
     {
         if (_pos + 4 > _data.Length) throw new InvalidOperationException("Truncated fixed32.");
@@ -70,6 +76,7 @@ public ref struct ProtoWireReader
         return v;
     }
 
+    /// <summary>Reads a little-endian fixed64 (8 bytes).</summary>
     public ulong ReadFixed64()
     {
         if (_pos + 8 > _data.Length) throw new InvalidOperationException("Truncated fixed64.");
@@ -78,9 +85,12 @@ public ref struct ProtoWireReader
         return v;
     }
 
+    /// <summary>Reads a float encoded as fixed32.</summary>
     public float ReadFloat() => BitConverter.Int32BitsToSingle(unchecked((int)ReadFixed32()));
+    /// <summary>Reads a double encoded as fixed64.</summary>
     public double ReadDouble() => BitConverter.Int64BitsToDouble(unchecked((long)ReadFixed64()));
 
+    /// <summary>Reads a length-delimited byte span.</summary>
     public ReadOnlySpan<byte> ReadBytes()
     {
         var len = (int)ReadVarint32();
@@ -90,6 +100,7 @@ public ref struct ProtoWireReader
         return slice;
     }
 
+    /// <summary>Reads a length-delimited UTF-8 string.</summary>
     public string ReadString()
     {
         var bytes = ReadBytes();
@@ -114,6 +125,7 @@ public ref struct ProtoWireReader
         return _pos + len;
     }
 
+    /// <summary>Skips the current field payload for the given wire type.</summary>
     public void SkipField(ProtoWireType wireType)
     {
         switch (wireType)

@@ -53,12 +53,12 @@ jobs:
           # The native collector creates files named straight 'cobertura.xml' rather than 'coverage.cobertura.xml'
           reportgenerator -reports:"./TestResults/**/*.xml" -targetdir:"./CoverageReport" -reporttypes:"Cobertura;MarkdownSummaryGithub" -assemblyfilters:"-*.Tests;-*Tests*" 
 
-      # - name: Archive code coverage results
-      #   uses: 5monkeys/cobertura-action@master
-      #   with:
-      #     path: CoverageReport/Cobertura.xml
-      #     name: code-coverage-report
-      #     minimum_coverage: 45
+      - name: Archive code coverage results
+        uses: 5monkeys/cobertura-action@master
+        with:
+          path: CoverageReport/Cobertura.xml
+          name: code-coverage-report
+          minimum_coverage: 45
 
       - name: Publish Coverage Summary to GitHub Actions
         run: cat ./CoverageReport/SummaryGithub.md >> $GITHUB_STEP_SUMMARY

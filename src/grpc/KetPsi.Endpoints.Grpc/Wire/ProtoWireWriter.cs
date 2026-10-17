@@ -90,6 +90,7 @@ public ref struct ProtoWireWriter
         _output.Advance(data.Length);
     }
 
+    /// <summary>Writes a length-delimited UTF-8 string (null is written as empty).</summary>
     public void WriteString(string? value)
     {
         if (value is null)
@@ -105,10 +106,15 @@ public ref struct ProtoWireWriter
     }
 }
 
+/// <summary>Protobuf wire types used by <see cref="ProtoWireWriter"/> and <see cref="ProtoWireReader"/>.</summary>
 public enum ProtoWireType
 {
+    /// <summary>Base-128 varint (int32, int64, bool, enum).</summary>
     Varint = 0,
+    /// <summary>Fixed 64-bit little-endian (fixed64, double).</summary>
     Fixed64 = 1,
+    /// <summary>Length-prefixed payload (string, bytes, embedded messages).</summary>
     LengthDelimited = 2,
+    /// <summary>Fixed 32-bit little-endian (fixed32, float).</summary>
     Fixed32 = 5
 }
