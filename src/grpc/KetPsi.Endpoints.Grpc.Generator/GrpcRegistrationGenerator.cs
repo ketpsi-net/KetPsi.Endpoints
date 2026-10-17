@@ -629,7 +629,7 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
                 {
                     if (i.Name != "IGrpcEndpointConfiguration" || i.TypeArguments.Length != 1)
                         continue;
-                    // Parse Request<TRequest>(req => req.Property(x => x.Foo, p => p.FromHeader("k")))
+                    // Parse Request<TRequest>(req => req.Property(x => x.Foo, p => p.FromMetadata("k")))
                     foreach (var syntaxRef in type.DeclaringSyntaxReferences)
                     {
                         if (syntaxRef.GetSyntax() is not TypeDeclarationSyntax typeDecl)
@@ -642,11 +642,11 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
                                 MemberAccessExpressionSyntax ma => ma.Name is GenericNameSyntax gn ? gn.Identifier.Text : ma.Name.Identifier.Text,
                                 _ => null
                             };
-                            // Look for FromHeader / FromPath invocations; walk up to Property
-                            if (methodName is not "FromHeader")
+                            // Look for FromMetadata / FromPath invocations; walk up to Property
+                            if (methodName is not "FromMetadata")
                                 continue;
 
-                            var source = "Header";
+                            var source = "Metadata";
                             string? key = null;
                             if (inv.ArgumentList.Arguments.Count >= 1)
                             {
@@ -867,7 +867,7 @@ public sealed class GrpcRegistrationGenerator : IIncrementalGenerator
                 byTarget[simple] = c;
         }
 
-        // Merge FromHeader / FromPath bindings from IGrpcEndpointConfiguration
+        // Merge FromMetadata / FromPath bindings from IGrpcEndpointConfiguration
         foreach (var group in DiscoverEndpointBindings(compilation).GroupBy(x => x.RequestTypeName))
         {
             var bindings = group.Select(x => (x.Prop, x.Source, x.Key, x.ClrHint)).ToImmutableArray();

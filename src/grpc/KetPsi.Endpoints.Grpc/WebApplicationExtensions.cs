@@ -6,18 +6,17 @@ using Microsoft.AspNetCore.Routing;
 namespace KetPsi.Endpoints.Grpc;
 
 /// <summary>
-/// Placeholder MapGrpc extensions detected by the source generator (name prefix "MapGrpc").
-/// <list type="bullet">
-/// <item><description><see cref="WebApplication"/> — top-level <c>app.MapGrpc&lt;T&gt;(...)</c></description></item>
-/// <item><description><see cref="IEndpointConventionBuilder"/> — after <c>MapGroup</c> / <c>WithGroupName</c>
-/// (return type of those APIs is <see cref="IEndpointConventionBuilder"/>)</description></item>
-/// </list>
-/// Use <c>WithGroupName("v1")</c> so the generator appends the version to the proto package name.
+/// Placeholder <c>MapGrpc*</c> extension methods detected by the source generator (name prefix <c>MapGrpc</c>).
+/// Defined on <see cref="WebApplication"/> and <see cref="IEndpointConventionBuilder"/> so chains with
+/// <c>MapGroup</c> / <c>WithGroupName</c> compile. Returns <see cref="IEndpointConventionBuilder"/> for
+/// <c>RequireAuthorization()</c> and other endpoint conventions.
 /// </summary>
 public static class WebApplicationExtensions
 {
-    // ---- WebApplication (top-level) ----
-
+    /// <summary>Maps a unary (or default) gRPC endpoint for handler <typeparamref name="T"/>.</summary>
+    /// <param name="app">The application builder.</param>
+    /// <param name="route">Relative route (<c>Service/Method</c> or longer); combined with <c>MapGroup</c> prefixes.</param>
+    /// <param name="configure">Optional interceptors / <c>FromMetadata</c> binding (also discovered from <see cref="IGrpcEndpointConfiguration{T}"/>).</param>
     public static IEndpointConventionBuilder MapGrpc<T>(
         this WebApplication app,
         string route,
@@ -25,6 +24,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpcCore(route, configure);
 
+    /// <summary>Maps a unary gRPC endpoint (alias of <see cref="MapGrpc{T}(WebApplication, string, Action{IGrpcEndpointBuilder{T}}?)"/>).</summary>
     public static IEndpointConventionBuilder MapGrpcUnary<T>(
         this WebApplication app,
         string route,
@@ -32,6 +32,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpc(app, route, configure);
 
+    /// <summary>Placeholder for client-streaming mapping (generator treats like unary until stream shape is fully emitted).</summary>
     public static IEndpointConventionBuilder MapGrpcClientStream<T>(
         this WebApplication app,
         string route,
@@ -39,6 +40,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpc(app, route, configure);
 
+    /// <summary>Placeholder for server-streaming mapping.</summary>
     public static IEndpointConventionBuilder MapGrpcServerStream<T>(
         this WebApplication app,
         string route,
@@ -46,6 +48,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpc(app, route, configure);
 
+    /// <summary>Placeholder for duplex streaming mapping.</summary>
     public static IEndpointConventionBuilder MapGrpcDuplexStream<T>(
         this WebApplication app,
         string route,
@@ -53,6 +56,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpc(app, route, configure);
 
+    /// <summary>Maps an endpoint using an explicit <typeparamref name="TConfig"/> configuration type.</summary>
     public static IEndpointConventionBuilder MapGrpc<TEndpoint, TConfig>(
         this WebApplication app,
         string route)
@@ -60,10 +64,7 @@ public static class WebApplicationExtensions
         where TConfig : IGrpcEndpointConfiguration<TEndpoint>, new()
         => GrpcEndpointConventionRegistry.Register(route);
 
-    // ---- IEndpointConventionBuilder (MapGroup / WithGroupName chain) ----
-    // WithGroupName returns IEndpointConventionBuilder, so MapGrpc must be defined here
-    // or the chain app.MapGroup("api").WithGroupName("v1").MapGrpc<T>(...) does not compile.
-
+    /// <summary>Maps a gRPC endpoint on a route group or after <c>WithGroupName</c>.</summary>
     public static IEndpointConventionBuilder MapGrpc<T>(
         this IEndpointConventionBuilder endpoints,
         string route,
@@ -71,6 +72,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpcCore(route, configure);
 
+    /// <inheritdoc cref="MapGrpcUnary{T}(WebApplication, string, Action{IGrpcEndpointBuilder{T}}?)"/>
     public static IEndpointConventionBuilder MapGrpcUnary<T>(
         this IEndpointConventionBuilder endpoints,
         string route,
@@ -78,6 +80,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpc(endpoints, route, configure);
 
+    /// <inheritdoc cref="MapGrpcClientStream{T}(WebApplication, string, Action{IGrpcEndpointBuilder{T}}?)"/>
     public static IEndpointConventionBuilder MapGrpcClientStream<T>(
         this IEndpointConventionBuilder endpoints,
         string route,
@@ -85,6 +88,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpc(endpoints, route, configure);
 
+    /// <inheritdoc cref="MapGrpcServerStream{T}(WebApplication, string, Action{IGrpcEndpointBuilder{T}}?)"/>
     public static IEndpointConventionBuilder MapGrpcServerStream<T>(
         this IEndpointConventionBuilder endpoints,
         string route,
@@ -92,6 +96,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpc(endpoints, route, configure);
 
+    /// <inheritdoc cref="MapGrpcDuplexStream{T}(WebApplication, string, Action{IGrpcEndpointBuilder{T}}?)"/>
     public static IEndpointConventionBuilder MapGrpcDuplexStream<T>(
         this IEndpointConventionBuilder endpoints,
         string route,
@@ -99,6 +104,7 @@ public static class WebApplicationExtensions
         where T : class, IEndpoint
         => MapGrpc(endpoints, route, configure);
 
+    /// <summary>Maps an endpoint with explicit configuration type on a route group.</summary>
     public static IEndpointConventionBuilder MapGrpc<TEndpoint, TConfig>(
         this IEndpointConventionBuilder endpoints,
         string route)
