@@ -444,6 +444,9 @@ public partial class EndpointGenerator : IIncrementalGenerator
             var handlerDisplayName = handlerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
             var handlerAccessibility = GetEffectiveAccessibility(handlerType);
 
+            // Fully-qualified return type of ExecuteAsync (always global::-qualified).
+            var returnTypeDisplay = executeMethod.ReturnType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
             // External IHttpEndpointConfiguration is applied once in RegisterSourceOutput
             // (configs are collected via SyntaxProvider). Here we only capture inline attributes.
             var parameters = new List<ParameterToGenerate>();
@@ -491,7 +494,8 @@ public partial class EndpointGenerator : IIncrementalGenerator
                 skipApigeneration,
                 usesVersioning,
                 obsoleteMessage,
-                extensionClassName);
+                extensionClassName,
+                returnTypeDisplay);
 
             return new GenerationResult(endpoint, diagnostics);
         }
@@ -1523,9 +1527,11 @@ public partial class EndpointGenerator : IIncrementalGenerator
             var finalChains = new StringBuilder(ep.EndpointChainedCalls);
             if (!string.IsNullOrEmpty(ep.EndpointName)) finalChains.Append($".WithName({ep.EndpointName})");
 
-            sb.Append($"            {builderVar}.{ep.HttpMethod}(\"{ep.RouteValue}\",");
-            sb.Append($" ({string.Join(", ", lambdaParams)}) =>");
-            sb.Append($"{{  return {targetCaller}.ExecuteAsync({string.Join(", ", invocationArgs)}); }})");
+            // Explicit return type + expression-bodied lambda (required for Native AOT / RDF typing).
+            var returnType = string.IsNullOrEmpty(ep.ReturnTypeName) ? "global::System.Threading.Tasks.Task" : ep.ReturnTypeName;
+            sb.Append($"            {builderVar}.{ep.HttpMethod}(\"{ep.RouteValue}\", ");
+            sb.Append($"{returnType} ({string.Join(", ", lambdaParams)}) => ");
+            sb.Append($"{targetCaller}.ExecuteAsync({string.Join(", ", invocationArgs)}))");
             sb.AppendLine(finalChains.ToString());
 
             if (!string.IsNullOrEmpty(ep.ObsoleteMessage))
@@ -1666,7 +1672,8 @@ public partial class EndpointGenerator : IIncrementalGenerator
         bool skipApiGeneration,
         bool usesVersioning,
         string? obsoleteMessage,
-        string extensionClassName) : IEquatable<EndpointToGenerate>
+        string extensionClassName,
+        string returnTypeName) : IEquatable<EndpointToGenerate>
     {
         public string AssemblyName { get; } = assemblyName;
         public string HandlerTypeName { get; } = handlerTypeName;
@@ -1687,6 +1694,11 @@ public partial class EndpointGenerator : IIncrementalGenerator
         public bool UsesVersioning { get; } = usesVersioning;
         public string? ObsoleteMessage { get; } = obsoleteMessage;
         public string ExtensionClassName { get; } = extensionClassName;
+        /// <summary>
+        /// Fully-qualified return type of the handler's ExecuteAsync method (e.g. global::System.Threading.Tasks.Task&lt;...&gt;).
+        /// Emitted as the explicit return type on the generated minimal-API lambda.
+        /// </summary>
+        public string ReturnTypeName { get; } = returnTypeName;
 
         public bool Equals(EndpointToGenerate? other)
         {
@@ -1701,7 +1713,8 @@ public partial class EndpointGenerator : IIncrementalGenerator
                 && EndpointChainedCalls == other.EndpointChainedCalls
                 && GroupDefinition == other.GroupDefinition
                 && EndpointName == other.EndpointName
-                && ExtensionClassName == other.ExtensionClassName;
+                && ExtensionClassName == other.ExtensionClassName
+                && ReturnTypeName == other.ReturnTypeName;
         }
 
         public override bool Equals(object? obj) => Equals(obj as EndpointToGenerate);
@@ -1720,6 +1733,7 @@ public partial class EndpointGenerator : IIncrementalGenerator
                 hashCode = (hashCode * 397) ^ (GroupDefinition?.GetHashCode() ?? 0);
                 hashCode = (hashCode * 397) ^ (EndpointName?.GetHashCode() ?? 0);
                 hashCode = (hashCode * 397) ^ (ExtensionClassName?.GetHashCode() ?? 0);
+                hashCode = (hashCode * 397) ^ (ReturnTypeName?.GetHashCode() ?? 0);
                 return hashCode;
             }
         }
