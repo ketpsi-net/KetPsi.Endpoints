@@ -58,11 +58,14 @@ Or call your own extension that contains the `Map*` calls; the generator still e
 
 ## HTTP verbs
 
+All map methods require `THandler : class, IEndpoint`:
+
 ```csharp
 app.MapGet<THandler>(pattern);
 app.MapPost<THandler>(pattern);
 app.MapPut<THandler>(pattern);
 app.MapDelete<THandler>(pattern);
+app.MapPatch<THandler>(pattern);
 ```
 
 Chain normal Minimal API conventions:
@@ -72,6 +75,42 @@ app.MapPost<CreateUserHandler>("/users")
    .WithName("CreateUser")
    .WithTags("Users")
    .RequireAuthorization();
+```
+
+### Generated lambda shape
+
+The generator emits an **expression-bodied** Minimal API lambda with an **explicit, fully qualified return type** taken from `ExecuteAsync`:
+
+```csharp
+group.MapGet("current",
+    global::System.Threading.Tasks.Task<global::KetPsi.Results.Result<global::My.Contracts.RealmContract>>
+    (global::System.Threading.CancellationToken @cancellationToken,
+     [FromServices] global::My.Handlers.GetCurrentRealmHandler handler)
+    => handler.ExecuteAsync(@cancellationToken));
+```
+
+This keeps the handler return type visible to the C# compiler and to ASP.NET Core’s `RequestDelegateFactory`.
+
+#### Native AOT (`PublishAot=true`)
+
+When the consuming project publishes with `<PublishAot>true</PublishAot>`, the package injects `<CompilerVisibleProperty Include="PublishAot" />` so the generator can see the flag. In that mode it emits **`async` / `await`**:
+
+```csharp
+group.MapGet("current",
+    async global::System.Threading.Tasks.Task<global::KetPsi.Results.Result<global::My.Contracts.RealmContract>>
+    (global::System.Threading.CancellationToken @cancellationToken,
+     [FromServices] global::My.Handlers.GetCurrentRealmHandler handler)
+    => await handler.ExecuteAsync(@cancellationToken));
+```
+
+Awaiting inside the lambda avoids `RequestDelegateFactory` requesting JSON metadata for `Task<T>` itself (a common Native AOT failure with source-generated serializers). Still register the **unwrapped** payload types (`ApiResult<T>`, `T`, …) on your `JsonSerializerContext`—not `Task<T>`.
+
+If you reference the generator via a project reference instead of the NuGet package, add this to the **app** project (or a shared `Directory.Build.props`):
+
+```xml
+<ItemGroup>
+  <CompilerVisibleProperty Include="PublishAot" />
+</ItemGroup>
 ```
 
 ---

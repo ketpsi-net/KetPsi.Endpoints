@@ -206,6 +206,16 @@ public partial class EndpointGenerator : IIncrementalGenerator
                 var handlers = source.Left.Left.Left.Right;
                 var configs = source.Left.Left.Right;
                 var compilation = source.Left.Right;
+                var analyzerOptions = source.Right;
+
+                // PublishAot is exposed via <CompilerVisibleProperty Include="PublishAot" />
+                // (shipped in KetPsi.Endpoints.Http.build.props for consuming projects).
+                var publishAot = false;
+                if (analyzerOptions.GlobalOptions.TryGetValue("build_property.PublishAot", out var publishAotValue) &&
+                    !string.IsNullOrWhiteSpace(publishAotValue))
+                {
+                    publishAot = string.Equals(publishAotValue, "true", StringComparison.OrdinalIgnoreCase);
+                }
 
                 // 1. Report diagnostics from IEndpoint class declarations (e.g. KP003)
                 if (!handlers.IsDefaultOrEmpty)
@@ -357,7 +367,7 @@ public partial class EndpointGenerator : IIncrementalGenerator
                     }
                     usedNames.Add(className);
 
-                    var groupCode = GenerateProjectEndpointExtensionsForGroup(className, group.ToList());
+                    var groupCode = GenerateProjectEndpointExtensionsForGroup(className, group.ToList(), publishAot);
                     spc.AddSource($"{className}HttpEndpoints.g.cs", groupCode);
 
                     masterMapCalls.Add($"            app.Map{className}Endpoints();");
@@ -1347,7 +1357,7 @@ public partial class EndpointGenerator : IIncrementalGenerator
         return sb.ToString();
     }
 
-    private static string GenerateProjectEndpointExtensionsForGroup(string handlerName, List<EndpointToGenerate?> endpoints)
+    private static string GenerateProjectEndpointExtensionsForGroup(string handlerName, List<EndpointToGenerate?> endpoints, bool publishAot = false)
     {
         if (endpoints is null || endpoints.Count == 0)
             return string.Empty;
@@ -1368,7 +1378,7 @@ public partial class EndpointGenerator : IIncrementalGenerator
             }
         }
 
-        var mappingLogic = GenerateMappingLogic(endpoints);
+        var mappingLogic = GenerateMappingLogic(endpoints, publishAot);
         var generatedHelperMethods = endpoints.Select(e => e?.GeneratedHelperMethods).Where(e => e is not null).DefaultIfEmpty(string.Empty).Aggregate((f, s) => $"{f} {s}");
 
         var sb = new StringBuilder();
@@ -1457,7 +1467,7 @@ public partial class EndpointGenerator : IIncrementalGenerator
         return sb.ToString();
     }
 
-    private static string GenerateMappingLogic(List<EndpointToGenerate?> endpoints)
+    private static string GenerateMappingLogic(List<EndpointToGenerate?> endpoints, bool publishAot = false)
     {
         var sb = new StringBuilder();
         var groupVars = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1527,11 +1537,16 @@ public partial class EndpointGenerator : IIncrementalGenerator
             var finalChains = new StringBuilder(ep.EndpointChainedCalls);
             if (!string.IsNullOrEmpty(ep.EndpointName)) finalChains.Append($".WithName({ep.EndpointName})");
 
-            // Explicit return type + expression-bodied lambda (required for Native AOT / RDF typing).
+            // Explicit return type + expression-bodied lambda.
+            // When PublishAot is true, emit async/await so RequestDelegateFactory sees the
+            // awaited result type for JSON metadata instead of Task<T> (avoids missing
+            // JsonTypeInfo for Task`1 under Native AOT source-gen serializers).
             var returnType = string.IsNullOrEmpty(ep.ReturnTypeName) ? "global::System.Threading.Tasks.Task" : ep.ReturnTypeName;
+            var asyncKeyword = publishAot ? "async " : string.Empty;
+            var awaitKeyword = publishAot ? "await " : string.Empty;
             sb.Append($"            {builderVar}.{ep.HttpMethod}(\"{ep.RouteValue}\", ");
-            sb.Append($"{returnType} ({string.Join(", ", lambdaParams)}) => ");
-            sb.Append($"{targetCaller}.ExecuteAsync({string.Join(", ", invocationArgs)}))");
+            sb.Append($"{asyncKeyword}{returnType} ({string.Join(", ", lambdaParams)}) => ");
+            sb.Append($"{awaitKeyword}{targetCaller}.ExecuteAsync({string.Join(", ", invocationArgs)}))");
             sb.AppendLine(finalChains.ToString());
 
             if (!string.IsNullOrEmpty(ep.ObsoleteMessage))
