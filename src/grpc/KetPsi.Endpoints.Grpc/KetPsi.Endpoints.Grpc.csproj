@@ -8,31 +8,38 @@
 		<Nullable>enable</Nullable>
 		<Description>Code-first gRPC endpoints for KetPsi (compile-time codecs, no protobuf-net)</Description>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<GeneratorOutputDir>..\KetPsi.Endpoints.Grpc.Generator\bin\$(Configuration)\netstandard2.0\</GeneratorOutputDir>
 	</PropertyGroup>
 
 	<ItemGroup>
-
-	</ItemGroup>
-
-	<ItemGroup>
-		<FrameworkReference Include="Microsoft.AspNetCore.App" Version="10.0.0" />
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
 		<PackageReference Include="Grpc.AspNetCore.Server" Version="2.84.0" />
 		<PackageReference Include="Grpc.Net.Common" Version="2.84.0" />
-		<PackageReference Include="System.ServiceModel.Primitives" Version="10.0.652802" />
 	</ItemGroup>
 
-
-	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
-		<PackageReference Include="KetPsi.Endpoints.Abstractions" Version="$(Version)" />
-		<PackageReference Include="KetPsi.Endpoints.Grpc.Abstractions" Version="$(Version)" />
-	</ItemGroup>
-	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+	<!--
+	  Always ProjectReference (also in Release / any platform): NuGet pack turns these into package
+	  dependencies with the same $(Version), so there is no chicken-and-egg on unpublished packages.
+	-->
+	<ItemGroup>
 		<ProjectReference Include="..\..\KetPsi.Endpoints.Abstractions\KetPsi.Endpoints.Abstractions.csproj" />
 		<ProjectReference Include="..\KetPsi.Endpoints.Grpc.Abstractions\KetPsi.Endpoints.Grpc.Abstractions.csproj" />
+		<!-- Build-order only: guarantees the generator is built before this project is packed. -->
+		<ProjectReference Include="..\KetPsi.Endpoints.Grpc.Generator\KetPsi.Endpoints.Grpc.Generator.csproj"
+		                  ReferenceOutputAssembly="false"
+		                  PrivateAssets="all"
+		                  SetTargetFramework="TargetFramework=netstandard2.0"
+		                  SkipGetTargetFrameworkProperties="true" />
 	</ItemGroup>
 
 	<ItemGroup>
-		<None Include="..\KetPsi.Endpoints.Grpc.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Endpoints.Grpc.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs\KetPsi.Endpoints.Grpc.Generator.dll" Visible="false" Condition="Exists('..\KetPsi.Endpoints.Grpc.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Endpoints.Grpc.Generator.dll')" />
+		<None Include="$(GeneratorOutputDir)KetPsi.Endpoints.Grpc.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs\KetPsi.Endpoints.Grpc.Generator.dll" Visible="false" />
 	</ItemGroup>
+
+	<!-- Fail packing (instead of silently shipping a package without the generator) if the DLL is missing. -->
+	<Target Name="EnsureGrpcGeneratorBuilt" BeforeTargets="GenerateNuspec">
+		<Error Condition="!Exists('$(GeneratorOutputDir)KetPsi.Endpoints.Grpc.Generator.dll')"
+		       Text="KetPsi.Endpoints.Grpc.Generator.dll was not found in $(GeneratorOutputDir). Build the generator before packing." />
+	</Target>
 
 </Project>

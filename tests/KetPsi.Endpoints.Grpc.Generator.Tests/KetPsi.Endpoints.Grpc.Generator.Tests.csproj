@@ -26,6 +26,8 @@
   <ItemGroup>
     <!-- Library reference only — not as Analyzer — so we can unit-test GrpcRouteAnalyzer -->
     <ProjectReference Include="..\..\src\grpc\KetPsi.Endpoints.Grpc.Generator\KetPsi.Endpoints.Grpc.Generator.csproj" />
+    <!-- Runtime assemblies are referenced only to feed metadata references into generator-driver compilations -->
+    <ProjectReference Include="..\..\src\grpc\KetPsi.Endpoints.Grpc\KetPsi.Endpoints.Grpc.csproj" />
   </ItemGroup>
 
 </Project>
