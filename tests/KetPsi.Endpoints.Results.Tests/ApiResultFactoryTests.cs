@@ -61,7 +61,7 @@ public class ApiResultFactoryTests
     {
         var r = ApiResult.Request.BadRequest("validation.email", "Email required");
         Assert.Equal(400, r.StatusCode);
-        Assert.Equal("validation.email", r.Errors[0]!.Code);
+        Assert.Equal("validation.email", r.Errors![0].Code);
         Assert.Equal("Email required", r.Errors[0].Message);
         Assert.Equal(400, r.Errors[0].StatusCode);
     }
@@ -83,7 +83,7 @@ public class ApiResultFactoryTests
     {
         var r = ApiResult.Request.Unauthorized();
         Assert.Equal(401, r.StatusCode);
-        Assert.Equal("auth.unauthorized", r.Errors[0]!.Code);
+        Assert.Equal("auth.unauthorized", r.Errors![0].Code);
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public class ApiResultFactoryTests
     {
         var r = ApiResult.Request.NotFound();
         Assert.Equal(404, r.StatusCode);
-        Assert.Equal("resource.not_found", r.Errors[0]!.Code);
+        Assert.Equal("resource.not_found", r.Errors![0].Code);
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class ApiResultFactoryTests
         var r = ApiResult.Request.NotFound<string>("resource.not_found", "gone");
         Assert.Equal(404, r.StatusCode);
         Assert.Null(r.Value);
-        Assert.Equal("gone", r.Errors[0]!.Message);
+        Assert.Equal("gone", r.Errors![0].Message);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class ApiResultFactoryTests
     {
         var meta = new Dictionary<string, object?> { ["field"] = "email" };
         var r = ApiResult.Request.BadRequest("v.1", "bad", meta);
-        Assert.Equal("email", r.Errors[0]!.Metadata!["field"]);
+        Assert.Equal("email", r.Errors![0].Metadata!["field"]);
     }
 
     // ───────────────────────────── 5xx Server ─────────────────────────────
@@ -153,7 +153,7 @@ public class ApiResultFactoryTests
     {
         var r = ApiResult.Server.InternalError();
         Assert.Equal(500, r.StatusCode);
-        Assert.Equal("server.internal_error", r.Errors[0]!.Code);
+        Assert.Equal("server.internal_error", r.Errors![0].Code);
     }
 
     [Fact]
