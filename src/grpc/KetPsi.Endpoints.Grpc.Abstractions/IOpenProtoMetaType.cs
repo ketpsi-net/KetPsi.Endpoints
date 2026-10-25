@@ -5,6 +5,7 @@ namespace KetPsi.Endpoints.Grpc.Abstractions;
 /// </summary>
 public interface IOpenProtoMetaType
 {
+    /// <summary>Maps a property (by name) to a protobuf field number.</summary>
     IOpenProtoMetaType Property(string propertyName, int order);
 
     /// <summary>
