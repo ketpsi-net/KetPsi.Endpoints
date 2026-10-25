@@ -20,25 +20,17 @@ public sealed record ApiResultError(
     /// <summary>
     /// Maps a <see cref="ErrorResult"/> from KetPsi.Results into an API error.
     /// </summary>
+    /// <param name="error">The domain error.</param>
+    /// <param name="statusCode">Explicit status; defaults to the status mapped from <see cref="ErrorResult.Type"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="error"/> is null.</exception>
     public static ApiResultError From(ErrorResult error, int? statusCode = null)
-        => new(
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return new(
             error.Code,
             error.Message,
-            error.Type.ToString(),
-            GetMetadata(error.Metadata),
+            ApiResultErrorHelpers.GetTitle(error.Type),
+            ApiResultErrorHelpers.ToStringMetadata(error.Metadata),
             statusCode ?? error.Type.ToStatusCode());
-
-    private static Dictionary<string, string?>? GetMetadata(IReadOnlyDictionary<string, object?>? errors)
-    {
-        if (errors is null)
-            return null;
-
-        var result = new Dictionary<string, string?>();
-        foreach (var keyValue in errors)
-        {
-            result[keyValue.Key] = keyValue.Value?.ToString();
-        }
-
-        return result;
     }
 }
