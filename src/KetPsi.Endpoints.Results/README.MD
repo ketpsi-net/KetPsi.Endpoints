@@ -17,12 +17,43 @@ API-layer results that sit **on top of** [KetPsi.Results](../KetPsi.Results). Do
 
 ## What you get
 
-- **`ApiResult<T>`** — `StatusCode`, `Data`, `Errors`
+- **`ApiResult<T>`** — `StatusCode`, `Value`, `Errors`
 - **`ApiResultError`** — code, message, title, metadata, optional per-error status
 - **HTTP factories** — `ApiResult.Ok`, `Request.NotFound`, `Server.ServiceUnavailable`, …
 - **Builders from domain results** — `ApiResult.From(result).AsIs()` / `.As(map)` (+ async & page variants)
 
 No Mapster dependency: mapping uses `Func<T, TResult>`.
+
+## Performance notes
+
+- `ApiResult.Ok()`, `Accepted()` and `NoContent()` return cached immutable instances (zero allocation).
+- `ApiResult.From(...)` returns `readonly struct` builders, so `From(result).AsIs()` allocates only the `ApiResult<T>`.
+- Async builders consume a `ValueTask` source exactly once (inside `From(...)`), so `AsIsAsync()` / `AsAsync()` may be
+  called repeatedly without double-awaiting an `IValueTaskSource`. When the source has already completed, mapping runs
+  synchronously (no async state machine).
+- Error titles come from a switch over `ErrorType` (no `Enum.ToString()`), and metadata values are formatted with
+  `CultureInfo.InvariantCulture`.
+- `Request.BadRequest((ApiResultError[])null)` throws `ArgumentNullException`; a null element throws `ArgumentException`.
+
+## Native AOT / source-generated JSON
+
+The package is trimming/AOT compatible and ships `ApiResultJsonContext`, a source-generated `JsonSerializerContext`
+for the payload-less shape (`ApiResult<object?>`, returned by `Ok()`, `NoContent()`, the error factories and
+`From(Result)`) plus `ApiResultError`. Add it to the resolver chain and declare your typed results in your own context:
+
+```csharp
+[JsonSerializable(typeof(ApiResult<OrderDto>))]
+internal partial class AppJsonContext : JsonSerializerContext;
+
+builder.Services.ConfigureHttpJsonOptions(o =>
+{
+    o.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonContext.Default);
+    o.SerializerOptions.TypeInfoResolverChain.Add(ApiResultJsonContext.Default);
+});
+```
+
+Payload-less results always carry a null `Value`, so no polymorphic `object` metadata is needed. If you put a non-null
+value into an `ApiResult<object?>` yourself, register its runtime type in a context too.
 
 ## Example
 
