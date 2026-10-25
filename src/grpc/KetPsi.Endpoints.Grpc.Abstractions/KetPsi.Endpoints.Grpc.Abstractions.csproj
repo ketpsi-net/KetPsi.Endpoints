@@ -7,6 +7,13 @@
     <Nullable>enable</Nullable>
     <Description>Abstractions for KetPsi code-first gRPC endpoints (proto type configuration)</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- The file on disk is README.md; version.props packs README.MD, which does not exist on case-sensitive file systems (NU5019/NU5039). -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="README.MD" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>

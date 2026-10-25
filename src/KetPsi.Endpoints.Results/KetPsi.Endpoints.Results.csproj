@@ -7,6 +7,7 @@
 		<Nullable>enable</Nullable>
 		<PackageTags>endpoints;handlers;abstractions;minimal-apis;source-generators;aspnetcore;ketpsi</PackageTags>
 		<Description>result objects for KetPsi endpoint handlers</Description>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 	</PropertyGroup>
 
 	<ItemGroup>

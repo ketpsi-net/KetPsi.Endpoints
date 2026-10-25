@@ -9,6 +9,7 @@
 		<!-- Host/Program.cs is the entry point for WebApplicationFactory<Program>; do not let the SDK generate a second Main -->
 		<OutputType>Exe</OutputType>
 		<GenerateProgramFile>false</GenerateProgramFile>
+		<EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -32,6 +33,15 @@
 		</PackageReference>
 		<PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
 		<PackageReference Include="Grpc.Net.Client" Version="2.84.0" />
+		<PackageReference Include="Google.Protobuf" Version="3.33.0" />
+		<PackageReference Include="Grpc.Tools" Version="2.83.0">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+	</ItemGroup>
+
+	<ItemGroup>
+		<Protobuf Include="Interop\interop.proto" GrpcServices="None" />
 	</ItemGroup>
 
 	<ItemGroup>

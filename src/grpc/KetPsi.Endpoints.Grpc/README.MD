@@ -58,152 +58,91 @@ app.UseProtoEndpoint();               // optional GET /proto
 app.Run();
 ```
 
-Variants: `MapGrpc`, `MapGrpcUnary`, `MapGrpcClientStream`, `MapGrpcServerStream`, `MapGrpcDuplexStream`.
+Variants: `MapGrpc` (method kind inferred from the handler signature), `MapGrpcUnary`, `MapGrpcClientStream`, `MapGrpcServerStream`, `MapGrpcDuplexStream`, `MapGrpc<THandler, TConfig>`.
+
+The `MapGrpc*` methods are **inert markers**: they map nothing at runtime, never invoke `configure`, keep no state and do not allocate. The generator reads the call site at compile time, so the route must be a compile-time constant (KPG001) and `configure` must be an inline lambda (KPG008).
+
+---
+
+## Handler shapes and streaming
+
+| Handler signature | RPC kind | proto |
+|---|---|---|
+| `Task<TRes>` / `ValueTask<TRes>` / `TRes ExecuteAsync(TReq, CancellationToken)` | unary | `rpc M (TReq) returns (TRes)` |
+| `IAsyncEnumerable<TRes> ExecuteAsync(TReq, CancellationToken)` | server streaming | `returns (stream TRes)` |
+| `Task<TRes> ExecuteAsync(IAsyncEnumerable<TReq>, CancellationToken)` | client streaming | `(stream TReq)` |
+| `IAsyncEnumerable<TRes> ExecuteAsync(IAsyncEnumerable<TReq>, CancellationToken)` | duplex | `(stream TReq) returns (stream TRes)` |
+| `ExecuteAsync(CancellationToken)` (no request) | any | request is `google.protobuf.Empty` (`GrpcEmpty`) |
+| `Task` / `ValueTask` / `void` return | unary | response is `google.protobuf.Empty` (`GrpcEmpty`) |
+
+The `CancellationToken` parameter is optional. Request/response messages must be classes or records (structs are fine as nested messages, KPG023). Using `MapGrpcServerStream` etc. with a handler of a different shape is an error (KPG005).
 
 ---
 
 ## Routing
 
-### Relative route on `MapGrpc`
+The relative route is **service / method** (plus optional package segments). With `MapGroup` prefixes the relative route may be just the method (`app.MapGroup("Users").MapGrpc<T>("GetById")`). Every segment must be a protobuf identifier (`[A-Za-z_][A-Za-z0-9_]*`); `{param}` segments are ignored. Analyzer **DG001** enforces this (including `MapGroup` / `WithGroupName` values).
 
-The string argument is **service / method** (and optional path prefix segments). Analyzer **DG001** requires **at least two** non-parameter segments. There is **no** three-segment maximum. Segments like `{id}` are ignored when counting.
+| Call | Package | Service | RPC |
+|---|---|---|---|
+| `MapGrpc<T>("Users/GetById")` | `Api` | `Users` | `GetById` |
+| `MapGrpc<T>("billing/Orders/Create")` | `billing` | `Orders` | `Create` |
+| `MapGroup("/api/tests").MapGrpc<T>("Users/GetById")` | `api.tests` | `Users` | `GetById` |
+| `MapGroup("api").WithGroupName("v1").MapGrpc<T>("Users/Get")` | `api.v1` | `Users` | `Get` |
 
-| `MapGrpc` route | Service | RPC |
-|-----------------|---------|-----|
-| `Users/GetById` | `Users` | `GetById` |
-| `billing/Orders/Create` | `Orders` | `Create` |
-| `Orders/{id}/Get` | `Orders` | `Get` (`{id}` skipped) |
+The server route is `/{package}.{Service}/{Method}`. Group locals, fields and properties (also in other files) are resolved. Mapping the same RPC to a *different* handler/signature is an error (KPG003); identical duplicate mappings are merged.
 
-### Package (proto `package`)
-
-1. **MapGroup** path prefixes are prepended (supports locals: `var g = app.MapGroup(...); g.MapGrpc(...)`).
-2. Remaining path segments **before** service/method become the package (joined with `.`).
-3. If nothing is left for the package, default is `Api`.
-4. **Version** comes **only** from the last **`WithGroupName("...")`** on the chain, appended as `.v1` (proto-style), not from treating path segments as versions.
+### Conventions (`RequireAuthorization`, ...) are per RPC
 
 ```csharp
-// package Api; service Users; rpc GetById
-app.MapGrpc<GetUserByIdHandler>("Users/GetById");
-
-// package api.tests; service Users; rpc GetById
-app.MapGroup("/api/tests").MapGrpc<GetUserByIdHandler>("Users/GetById");
-
-// package api.tests.v1; service test; rpc create
-var group = app.MapGroup("/api/tests").WithGroupName("v1");
-group.MapGrpc<CreateHandler>("test/create");
+app.MapGrpc<ReadSecretHandler>("Vault/Read").RequireAuthorization("Admins"); // only Vault/Read
+app.MapGrpc<PingHandler>("Vault/Ping");                                       // stays anonymous
+app.MapGroup("api").RequireAuthorization().MapGrpc<OrdersHandler>("Orders/Get"); // group chain conventions apply too
 ```
 
-```protobuf
-package api.tests.v1;
-
-service test {
-  rpc create (CreateRequest) returns (CreateResponse);
-}
-```
-
-### `MapGroup` + `WithGroupName`
-
-`MapGrpc` is defined on:
-
-- `WebApplication` — top-level mapping
-- `IEndpointConventionBuilder` — after `MapGroup` / `WithGroupName` (required because `WithGroupName` returns that interface)
-
-Prefer fluent chains or assign the group to a local; both are resolved by the generator.
-
-### Conventions (`RequireAuthorization`)
-
-`MapGrpc` returns `IEndpointConventionBuilder`:
-
-```csharp
-app.MapGroup("/api/tests")
-   .WithGroupName("v1")
-   .MapGrpc<CreateOrderHandler>("orders/create")
-   .RequireAuthorization()
-   .RequireAuthorization("OrdersPolicy");
-```
-
-Conventions are stored by route and applied when `MapGrpcEndpoints` calls `MapGrpcService`.
+Conventions chained directly on the call (and on the `MapGroup` receiver chain, including the initializer of a group local) are re-emitted by the generator and applied to that single gRPC method endpoint. Arguments must be constants, static members or self-contained lambdas: references to locals, parameters or instance members are an **error** (KPG006) instead of silently dropping a security convention; `const` locals are inlined. Conventions applied to a stored result (`var ep = app.MapGrpc...; ep.RequireAuthorization();`) or added later to a group local are **not** captured (warning KPG007 for the former).
 
 ---
 
 ## Authentication & authorization
 
-gRPC on ASP.NET Core uses the same HTTP/2 pipeline as other endpoints.
-
-### Server
-
 ```csharp
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer();
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGrpc<SecureHandler>("Users/GetById")
-   .RequireAuthorization();
-
+app.MapGrpc<SecureHandler>("Users/GetById").RequireAuthorization();
 app.MapGrpcEndpoints();
 ```
 
-- Incoming `Authorization` is a normal request header; JWT bearer works without putting tokens on the protobuf contract.
-- In handlers, resolve the user with `IHttpContextAccessor` or `ServerCallContext.GetHttpContext().User`.
-
-```csharp
-public sealed class SecureHandler : IEndpoint
-{
-    private readonly IHttpContextAccessor _http;
-    public SecureHandler(IHttpContextAccessor http) => _http = http;
-
-    public Task<GetUserResponse> ExecuteAsync(GetUserRequest request, CancellationToken ct)
-    {
-        var user = _http.HttpContext?.User;
-        // ...
-    }
-}
-```
-
-Register `builder.Services.AddHttpContextAccessor();`.
-
-### Propagating auth to downstream gRPC services
-
-Copy the header onto outgoing metadata (or use a client interceptor):
-
-```csharp
-var auth = callContext.RequestHeaders.GetValue("authorization");
-var headers = new Metadata();
-if (!string.IsNullOrEmpty(auth))
-    headers.Add("Authorization", auth);
-```
-
-Do **not** model bearer tokens as protobuf fields unless you intentionally want them in the contract.
+Anonymous calls to a protected RPC fail with `StatusCode.Unauthenticated`. In handlers use `IHttpContextAccessor` (or `ServerCallContext.GetHttpContext().User` in interceptors). Do not model bearer tokens as protobuf fields.
 
 ---
 
 ## Metadata binding (`FromMetadata`)
 
-Bind request DTO properties from gRPC metadata (not from the wire message). Configure on **`IGrpcEndpointConfiguration<TEndpoint>`**, not on `IProtoTypeConfiguration`.
-
 ```csharp
 public sealed class CreateOrderConfig : IGrpcEndpointConfiguration<CreateOrderHandler>
 {
     public void Configure(IGrpcEndpointBuilder<CreateOrderHandler> builder)
-    {
-        builder.Request<CreateOrderRequest>(req =>
+        => builder.Request<CreateOrderRequest>(req =>
         {
             req.Property(x => x.TenantId, p => p.FromMetadata("x-tenant-id"));
             req.Property(x => x.TraceId, p => p.FromMetadata()); // key = property name
         });
-    }
 }
 ```
 
-Header-bound properties are omitted from the `/proto` schema and codecs. Applied after deserialize, before the handler runs.
+- Header-bound properties are removed from the request message (codec and `/proto`).
+- Values are parsed by generated, typed, reflection-free code using `CultureInfo.InvariantCulture` (integral types, `float`/`double`/`decimal`, `bool`, `Guid`, `DateTime(Offset)`, `DateOnly`, `TimeOnly`, `TimeSpan`, `char`, enums via `Enum.TryParse<T>` case-insensitive). Unparseable values leave the property unchanged.
+- The property needs an accessible, non-`init` setter (KPG020). Bindings apply to unary and server-streaming RPCs.
 
 ---
 
-## Per-handler interceptors
+## Per-endpoint interceptors
 
 ```csharp
 public sealed class CreateOrderConfig : IGrpcEndpointConfiguration<CreateOrderHandler>
@@ -211,107 +150,76 @@ public sealed class CreateOrderConfig : IGrpcEndpointConfiguration<CreateOrderHa
     public void Configure(IGrpcEndpointBuilder<CreateOrderHandler> builder)
     {
         builder.AddInterceptor<AuditInterceptor>();
-        builder.AddInterceptor<TenantInterceptor>();
+        builder.AddInterceptor(typeof(TenantInterceptor));
     }
 }
+
+// or inline, or with an explicit configuration type
+app.MapGrpc<PingHandler>("Svc/Ping", b => b.AddInterceptor<AuditInterceptor>());
+app.MapGrpc<StreamHandler, StreamConfig>("Svc/Stream");
 ```
 
-- Discovered at compile time; registered in `AddGrpcServices`.
-- Applied only on that handler’s methods inside the generated `IServiceMethodProvider` pipeline (not global `GrpcServiceOptions.Interceptors`).
-- Resolved from `RequestServices` on the call’s `HttpContext`.
+Interceptors run (in declaration order) only for the RPCs of that handler / call site, not via global `GrpcServiceOptions.Interceptors`. They are registered with `TryAddScoped` and resolved from the call's request services. The chain is built from cached static delegates (no per-call closures); RPCs without interceptors call the handler directly. Global interceptors: `services.AddGrpcInterceptor<T>()`.
 
 ---
 
-## Optional `/proto` endpoint
+## `/proto` endpoint
 
-| Method | Purpose |
-|--------|---------|
-| `AddProtoEndpoint()` | DI hook (options reserved) |
-| `UseProtoEndpoint()` | Maps `GET /proto` with compile-time schema |
-
-Not registered by `MapGrpcEndpoints`; call `UseProtoEndpoint()` explicitly when needed.
-
-Non-.NET teams generate clients from this schema with standard `protoc` tooling.
+`UseProtoEndpoint()` maps `GET /proto` and `GET /proto/{package}.proto`. One self-contained proto3 file is generated per package (messages and enums used by several packages are repeated in each file, which is wire-compatible), so the `package` always matches the server route. With a single package `/proto` returns that file; with several it returns all files, each preceded by a `// ===== file: name.proto =====` line.
 
 ---
 
-## Protobuf type configuration
+## Protobuf mapping (wire format)
 
-Use **KetPsi.Endpoints.Grpc.Abstractions** in Application projects:
+| CLR | proto3 | Notes |
+|---|---|---|
+| `bool`, `int`/`short`/`sbyte`, `long`/`nint`, `uint`/`ushort`/`byte`, `ulong`/`nuint`, `float`, `double` | `bool`, `int32`, `int64`, `uint32`, `uint64`, `float`, `double` | negative `int32` is a 10-byte varint |
+| `string`, `byte[]` | `string`, `bytes` | strings must be valid UTF-8 |
+| `char` | `uint32` | UTF-16 code unit |
+| enum | `enum` | values `ENUM_NAME_MEMBER`; a synthetic `ENUM_NAME_UNSPECIFIED = 0` is added when the CLR enum has no 0; values must fit int32 (KPG019) |
+| `Guid` | `string` | canonical `"D"` format (`""` = `Guid.Empty`) |
+| `decimal` | `string` | lossless invariant-culture text (exponent accepted when reading) |
+| `DateTime`, `DateTimeOffset` | `google.protobuf.Timestamp` | UTC; `Unspecified` treated as UTC |
+| `DateOnly` | `google.protobuf.Timestamp` | midnight UTC |
+| `TimeSpan` | `google.protobuf.Duration` | tick precision |
+| `TimeOnly` | `google.protobuf.Duration` | since midnight |
+| class / record / struct | `message` | inherited properties included |
+| `T[]`, `List<T>`, `IList<T>`, `IReadOnlyList<T>`, `IEnumerable<T>`, `ICollection<T>`, `HashSet<T>`, `ISet<T>`, `ImmutableArray<T>`, `ImmutableList<T>` | `repeated T` | scalars are written **packed**; packed and unpacked are both accepted |
+| `Dictionary<K,V>`, `IDictionary<K,V>`, `IReadOnlyDictionary<K,V>` | `map<K, V>` | keys: integral, `bool`, `string`, `char`, `Guid`, `decimal` (KPG018); a missing key/value reads as the default (`""`, empty message, ...) |
 
-```csharp
-public sealed class GetUserRequestConfig : IProtoTypeConfiguration<GetUserRequest>
-{
-    public void Configure(IProtoTypeBuilder<GetUserRequest> builder)
-    {
-        builder.Property(x => x.Id, 1)
-               .Property(x => x.Name, 2);
-    }
-}
-```
+Presence: non-nullable scalars use proto3 implicit presence (defaults are not written; missing fields read as defaults). Nullable value types and nullable-annotated strings are `optional` (explicit presence: `null` differs from the default). Absent nested message fields read as `null`.
 
-Field numbers drive schema emission and pure wire codecs at compile time.
+Unsupported property types (e.g. `object`, nested collections, `List<int?>`) are compile errors (KPG010). Unknown fields are skipped (not preserved).
 
-### Custom factory (`InstantiateWith`)
+### Field numbers
 
-Prefer a **public constructor** for simple DTOs. For domain types with **internal constructors** and static factories, use `InstantiateWith` so the generated reader does not call `new T()` + property setters.
+1. `IProtoTypeConfiguration<T>` / `IOpenProtoTypeConfiguration` (`Property(x => x.Name, 1)`; constants and simple counters such as `n++` are evaluated),
+2. otherwise `[ProtoMember(n)]`,
+3. otherwise declaration order (base-class properties first). This is reported as info KPG015 because reordering properties then breaks the wire contract.
 
-**Preferred (method group / `Delegate`)** — same idea as Minimal APIs:
+When 1 or 2 is used, properties without a number are **not** serialized and produce warning KPG011. Duplicate (KPG012) and invalid or reserved (KPG013) numbers are errors.
 
-```csharp
-public sealed class ApiResultConfiguration : IOpenProtoTypeConfiguration
-{
-    public void Configure(IOpenProtoTypeBuilder builder)
-    {
-        builder.ConfigureGeneric(typeof(ResponseWrapper<>), config => config
-            .Property("Status", 1)
-            .Property("Value", 2)
-            .InstantiateWith(ResponseWrapper<object>.Create)); // method group
-    }
-}
-```
+### Construction when deserializing
 
-```csharp
-// Closed type
-builder.Property(x => x.Id, 1)
-       .Property(x => x.Name, 2)
-       .InstantiateWith(OrderDto.Create);
-```
+`InstantiateWith(...)` factories win (arguments matched by parameter name, otherwise in field-number order). Otherwise the generator picks the accessible constructor that covers the most serialized properties and sets the remaining ones through `set` / `init` accessors, so `record R(int A) { public string B { get; init; } }` restores both. Properties that cannot be set produce KPG017; types that cannot be created produce KPG016.
 
-**Also supported**
+### Robustness and limits
 
-```csharp
-.InstantiateWith("Create")
-.InstantiateWith(nameof(ResponseWrapper<>.Create))
-.InstantiateWith(typeof(Helper), "Create")
-```
-
-The deserializer calls the factory with property values in **field-number order**. The method must be **static** and accessible from generated code. Generated shape:
-
-```csharp
-return global::MyApp.ResponseWrapper<T>.Create(__p_Status, __p_Value);
-```
+- Malformed input (truncated data, invalid varints including the 10th byte, field number 0, invalid wire types, length prefixes beyond the buffer, invalid UTF-8, mismatched groups) throws `ProtoWireException`. A known field with the wrong wire type is skipped. Generated marshallers turn every deserialization failure into `RpcException(StatusCode.InvalidArgument)`.
+- Message nesting is limited to 100 levels (`ProtoWireLimits.MaxDepth`) when reading and writing, so cyclic object graphs and hostile payloads fail instead of overflowing the stack.
+- Serialization computes sizes up front and writes straight into the transport buffer (`SetPayloadLength` + `GetBufferWriter`, no intermediate buffers); multi-segment requests are read through a pooled buffer.
 
 ---
 
 ## Registration (single host API)
 
-Always call:
-
 ```csharp
-services.AddGrpcServices();
-app.MapGrpcEndpoints();
-app.UseProtoEndpoint();   // optional GET /proto
+services.AddGrpcServices();  // idempotent; also calls AddGrpc()
+app.MapGrpcEndpoints();      // idempotent per application
+app.UseProtoEndpoint();      // optional, idempotent per application
 ```
 
-These extension methods live in the **runtime** package. Each project that contains **`MapGrpc`** emits a module initializer under `KetPsi.Endpoints.Grpc.Generated.{Assembly}` and registers with `GrpcGeneratedRegistrationHub`. The host methods apply **all** registered assemblies.
-
-| Project | Generates registration? |
-|---------|-------------------------|
-| Contains `MapGrpc<...>(...)` | Yes (internal, per-assembly) |
-| Only references the package | **No** |
-
-Prefer all `MapGrpc` calls in the **host** so `/proto` is mapped once.
+Each assembly containing `MapGrpc` gets a generated `KetPsi.Endpoints.Grpc.Generated.{Assembly}.KetPsiGrpcRegistration` (marked with `[assembly: GrpcGeneratedRegistration]`). Every assembly compiled with the generator explicitly calls `Ensure()` on the registrations of the assemblies it references, so library registrations are deterministic even when the library was never touched before `AddGrpcServices()` (no reliance on module initializers of unloaded assemblies; AOT-safe). Per-application state lives in DI and `IApplicationBuilder.Properties`, so several `WebApplication` instances in one process (for example `WebApplicationFactory` tests) do not interfere.
 
 ---
 
@@ -321,27 +229,60 @@ Prefer all `MapGrpc` calls in the **host** so `/proto` is mapped once.
 |---------|------|
 | `KetPsi.Endpoints.Abstractions` | `IEndpoint` marker |
 | `KetPsi.Endpoints.Grpc.Abstractions` | Proto type configuration |
-| `KetPsi.Endpoints.Grpc` | Runtime + extensions |
-| `KetPsi.Endpoints.Grpc.Generator` | Source generator + `DG001` route analyzer |
+| `KetPsi.Endpoints.Grpc` | Runtime and extensions; ships the generator and analyzer in `analyzers/dotnet/cs` |
 
-Target frameworks: `net8.0`, `net9.0`, `net10.0`.
+Target frameworks: `net8.0`, `net9.0`, `net10.0`. The runtime is trimming and Native AOT compatible (no reflection on the request path).
 
 ---
 
 ## Diagnostics
 
-| Id | Meaning |
-|----|---------|
-| **DG001** | `MapGrpc` relative route has fewer than 2 non-parameter segments |
+| Id | Severity | Meaning |
+|----|----------|---------|
+| DG001 | Error | Invalid route (segments, identifiers, MapGroup-aware) |
+| KPG001 | Warning | Route is not a compile-time constant (not mapped) |
+| KPG003 | Error | Same RPC mapped to a different handler or signature |
+| KPG004 | Error | Unsupported handler signature |
+| KPG005 | Error | Handler shape does not match the `MapGrpc*` variant |
+| KPG006 | Error | Chained convention references local state |
+| KPG007 | Warning | `MapGrpc` result stored; later conventions are not applied |
+| KPG008 | Warning | `configure` is not an inline lambda |
+| KPG010 | Error | Unsupported property type |
+| KPG011 | Warning | Property not serialized (no field number) |
+| KPG012 / KPG013 | Error | Duplicate / invalid field number |
+| KPG014 | Warning | Field number is not a compile-time value |
+| KPG015 | Info | Field numbers derived from declaration order |
+| KPG016 | Error | Message type cannot be constructed |
+| KPG017 | Warning | Serialized property cannot be set when deserializing |
+| KPG018 | Error | Invalid map key type |
+| KPG019 | Error | Enum value outside int32 |
+| KPG020 | Error | Invalid `FromMetadata` binding |
+| KPG022 | Warning | Configured property not found |
+| KPG023 | Error | Type cannot be a message (for example a struct request) |
 
 ---
 
-## Notes
+## Breaking changes in this version
 
-- Prefer `WithGroupName` for **API version** in the proto package; keep `MapGroup` paths for hierarchical naming.
-- Fluent `MapGroup(...).WithGroupName(...).MapGrpc(...)` or `var group = ...` are both supported for group discovery.
-- Authentication is pipeline-based; header binding is for business metadata, not a replacement for `UseAuthentication`.
+Wire and schema (existing clients must regenerate from `/proto`):
 
+- `Guid`: 16 raw bytes (.NET mixed-endian) became `string` (canonical "D").
+- `decimal`: `DecimalValue { int64 units; sfixed32 nanos }` became `string` (lossless); `DecimalValue` is no longer emitted.
+- `char`: one-character `string` became `uint32`.
+- `DateOnly` / `TimeOnly`: now `Timestamp` (midnight UTC) / `Duration` (previously serialized as broken sub-messages).
+- Repeated scalars are written packed; default scalar values are no longer written (implicit presence).
+- Enum value names are `UPPER_SNAKE` prefixed with the enum name; `X_UNSPECIFIED = 0` is added when needed.
+- Inherited properties are now serialized (with declaration-order numbering, base properties come first, which shifts numbers).
+- Message names are disambiguated (`Outer_Inner`, `Ns_Type`, `Wrapper_List_Int32`) when simple names collide.
+- `/proto` emits one file per package (bundle format when there are several); service paths always match the server routes.
+
+API:
+
+- Removed: the `System.ServiceModel` contracts and `*_Proxy` classes (and the `System.ServiceModel.Primitives` dependency), `GrpcEndpointConventionRegistry`, `GrpcEndpointInterceptorRegistry`, `ProtoWireCodec`, `ProtoWireWriterExtensions`, `ProtoWireReader.ReadPacked(int, Action)` / `BeginPacked()`.
+- `GeneratedProtoCodecs` and the generated service types are now `internal`; codecs expose `Size_X`, `Write_X`, `Read_X`, `Serialize_X`, `Deserialize_X(ReadOnlySpan<byte>)` and `Marshaller_X`.
+- `GrpcGeneratedRegistrationHub.Register` signature changed (generated code only).
+- Reader errors are `ProtoWireException` (derives from `InvalidOperationException`).
+- `MapGrpcServerStream` / `MapGrpcClientStream` / `MapGrpcDuplexStream` now require matching handler shapes.
 
 ## Coverage / ReportGenerator
 

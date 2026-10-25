@@ -1,17 +1,19 @@
 using KetPsi.Endpoints.Grpc;
 
 using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Microsoft.Extensions.DependencyInjection
 {
     /// <summary>
-    /// Host-facing registration. Forwards to every assembly that registered itself via
-    /// <see cref="GrpcGeneratedRegistrationHub"/> (only assemblies that call <c>MapGrpc</c>).
+    /// Host-facing registration. Applies every assembly whose generated registration ran
+    /// (the host's generated code explicitly ensures referenced KetPsi gRPC assemblies are registered).
     /// </summary>
     public static class KetPsiGeneratedGrpcServiceCollectionExtensions
     {
-        /// <summary>Registers handlers, proxies, and gRPC service types from all MapGrpc assemblies.</summary>
+        /// <summary>
+        /// Registers ASP.NET Core gRPC, handlers, generated services, method providers and per-endpoint
+        /// interceptors. Idempotent per <see cref="IServiceCollection"/>.
+        /// </summary>
         public static IServiceCollection AddGrpcServices(this IServiceCollection services)
             => GrpcGeneratedRegistrationHub.ApplyServices(services);
     }
@@ -19,18 +21,15 @@ namespace Microsoft.Extensions.DependencyInjection
 
 namespace Microsoft.AspNetCore.Builder
 {
-    /// <summary>
-    /// Host-facing endpoint mapping. Safe to call once from the host; aggregates all MapGrpc assemblies.
-    /// </summary>
+    /// <summary>Host-facing endpoint mapping (idempotent per application).</summary>
     public static class KetPsiGeneratedGrpcApplicationBuilderExtensions
     {
-        /// <summary>Maps all generated gRPC services discovered across referenced assemblies.</summary>
+        /// <summary>Maps all generated gRPC services (with their call-site conventions) once per application.</summary>
         public static WebApplication MapGrpcEndpoints(this WebApplication app)
             => GrpcGeneratedRegistrationHub.ApplyMapEndpoints(app);
 
         /// <summary>
-        /// Maps <c>GET /proto</c> for compile-time schemas from every assembly that registered a schema action.
-        /// Prefer a single host assembly owning MapGrpc when possible.
+        /// Maps <c>GET /proto</c> (compile-time proto3 schema) and <c>GET /proto/{file}</c>. Idempotent per application.
         /// </summary>
         public static WebApplication UseProtoEndpoint(this WebApplication app)
             => GrpcGeneratedRegistrationHub.ApplyProtoEndpoint(app);

@@ -5,8 +5,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+	  <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+	  <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
   </PropertyGroup>
-
+	<ItemGroup>
+		<CompilerVisibleProperty Include="EnableRequestDelegateGenerator" />
+	</ItemGroup>
   <ItemGroup>
 	  <PackageReference Include="FluentAssertions" Version="8.11.0" />
 	  <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
@@ -34,7 +38,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\http\KetPsi.Endpoints.Http.Generator\KetPsi.Endpoints.Http.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\http\KetPsi.Endpoints.Http.Generator\KetPsi.Endpoints.Http.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
     <ProjectReference Include="..\..\src\http\KetPsi.Endpoints.Http\KetPsi.Endpoints.Http.csproj" />
   </ItemGroup>
 

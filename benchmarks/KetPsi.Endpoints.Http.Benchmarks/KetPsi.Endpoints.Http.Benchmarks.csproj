@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <!--
+      Turns on both Microsoft's RDG (for the AspNetRdg host's lambdas) and KetPsi's generated RequestDelegate path
+      (for the KetPsi host). The AspNetRdf host passes Delegate-typed handlers, which RDG cannot intercept.
+    -->
+    <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <!-- Benchmarks intentionally keep the RDF host (reflection-based); not an AOT publish target. -->
+    <NoWarn>$(NoWarn);CA1822</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="BenchmarkDotNet.Artifacts/**" />
+    <None Remove="BenchmarkDotNet.Artifacts/**" />
+  </ItemGroup>
+
+  <!--
+    In-repo project references (includes KetPsi.Endpoints.Abstractions via Http).
+    Release NuGet refs are left commented so packaging can be re-enabled later without
+    mixing PackageReference + ProjectReference for the same assemblies.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\KetPsi.Endpoints.Abstractions\KetPsi.Endpoints.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\http\KetPsi.Endpoints.Http\KetPsi.Endpoints.Http.csproj" />
+    <ProjectReference Include="..\..\src\http\KetPsi.Endpoints.Http.Generator\KetPsi.Endpoints.Http.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!-- Activate when consuming published packages instead of in-repo projects:
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <PackageReference Include="KetPsi.Endpoints.Abstractions" Version="*" />
+    <PackageReference Include="KetPsi.Endpoints.Http" Version="*" />
+  </ItemGroup>
+  -->
+
+  <ItemGroup>
+    <CompilerVisibleProperty Include="PublishAot" />
+    <CompilerVisibleProperty Include="EnableRequestDelegateGenerator" />
+  </ItemGroup>
+
+</Project>

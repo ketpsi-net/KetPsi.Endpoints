@@ -43,6 +43,10 @@ jobs:
       - name: Run Grpc tests
         run: dotnet test tests/KetPsi.Endpoints.Grpc.Tests/KetPsi.Endpoints.Grpc.Tests.csproj --collect:"Code Coverage;Format=Cobertura" --results-directory ./TestResults/Grpc --logger:"junit;LogFilePath=test-result-grpc.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
       
+      # This project has no JunitXml.TestLogger reference, so it reports via TRX (still collected for coverage).
+      - name: Run Grpc generator tests
+        run: dotnet test tests/KetPsi.Endpoints.Grpc.Generator.Tests/KetPsi.Endpoints.Grpc.Generator.Tests.csproj --collect:"Code Coverage;Format=Cobertura" --results-directory ./TestResults/GrpcGenerator --logger:"trx;LogFileName=test-result-grpc-generator.trx"
+
       - name: Run Results tests
         run: dotnet test tests/KetPsi.Endpoints.Results.Tests/KetPsi.Endpoints.Results.Tests.csproj --collect:"Code Coverage;Format=Cobertura" --results-directory ./TestResults/Results --logger:"junit;LogFilePath=test-result-results.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
       
@@ -68,3 +72,24 @@ jobs:
         with:
           name: test-report
           path: './TestResults/**/test-result-*.xml'
+  # Native AOT publish of the KetPsi generated RequestDelegate path + KetPsi.Endpoints.Results.
+  # Trim/AOT warnings (IL2xxx/IL3xxx) are errors in the smoke project; the binary then self-tests its endpoints.
+  # Runner prerequisites (Linux): clang and zlib1g-dev (Native AOT toolchain).
+  aot-smoke:
+    runs-on: self-hosted
+    needs: [test-prerequisite]
+    if: needs.test-prerequisite.outputs.should_run_test == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Publish AOT smoke app
+        run: dotnet publish benchmarks/KetPsi.Endpoints.Http.AotSmoke/KetPsi.Endpoints.Http.AotSmoke.csproj -c Release -r linux-x64 -o ./aot-smoke
+
+      - name: Run AOT smoke app
+        run: ./aot-smoke/KetPsi.Endpoints.Http.AotSmoke --smoke
