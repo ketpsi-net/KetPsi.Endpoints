@@ -27,18 +27,46 @@
 	</ItemGroup>
 
 
-	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
+	<!--<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU'">
 		<PackageReference Include="KetPsi.Endpoints.Abstractions" Version="$(Version)" />
 		<PackageReference Include="KetPsi.Endpoints.Http.Abstractions" Version="$(Version)" />
 	</ItemGroup>
-	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+	<ItemGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">-->
+	<ItemGroup>
 		<ProjectReference Include="..\..\KetPsi.Endpoints.Abstractions\KetPsi.Endpoints.Abstractions.csproj" />
 		<ProjectReference Include="..\KetPsi.Endpoints.Http.Abstractions\KetPsi.Endpoints.Http.Abstractions.csproj" />
 	</ItemGroup>
 
 
+	<!--
+		The source generator ships inside this package (analyzers/dotnet/cs). The project reference only enforces
+		build order (the generator is built before this project, and therefore before pack); it is not referenced
+		as an assembly and does not run as an analyzer on this library.
+	-->
 	<ItemGroup>
-		<None Include="..\KetPsi.Endpoints.Http.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Endpoints.Http.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs\KetPsi.Endpoints.Http.Generator.dll" Visible="false" />
+		<ProjectReference Include="..\KetPsi.Endpoints.Http.Generator\KetPsi.Endpoints.Http.Generator.csproj"
+		                  ReferenceOutputAssembly="false"
+		                  Private="false"
+		                  SkipGetTargetFrameworkProperties="true"
+		                  SetTargetFramework="TargetFramework=netstandard2.0" />
 	</ItemGroup>
+
+	<PropertyGroup>
+		<KetPsiHttpGeneratorDll>$(MSBuildThisFileDirectory)..\KetPsi.Endpoints.Http.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Endpoints.Http.Generator.dll</KetPsiHttpGeneratorDll>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="$(KetPsiHttpGeneratorDll)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+		<!-- CompilerVisibleProperty for PublishAot / EnableRequestDelegateGenerator (named after the PackageId). -->
+		<!-- Sources live in packaging/ because 'build/' folders are git-ignored in this repository. -->
+		<None Include="packaging\KetPsi.Endpoints.Http.props" Pack="true" PackagePath="build\$(PackageId).props" />
+		<None Include="packaging\KetPsi.Endpoints.Http.Transitive.props" Pack="true" PackagePath="buildTransitive\$(PackageId).props" />
+	</ItemGroup>
+
+	<!-- Never ship a package without the generator. -->
+	<Target Name="KetPsiEnsureHttpGeneratorPacked" BeforeTargets="_GetPackageFiles;GenerateNuspec">
+		<Error Condition="!Exists('$(KetPsiHttpGeneratorDll)')"
+		       Text="KetPsi.Endpoints.Http.Generator.dll was not found at '$(KetPsiHttpGeneratorDll)'. Build the generator (Configuration=$(Configuration)) before packing." />
+	</Target>
 
 </Project>

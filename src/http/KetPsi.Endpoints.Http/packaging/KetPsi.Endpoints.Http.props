@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    Makes the MSBuild properties that select the KetPsi request-delegate (Native AOT) path visible to the
+    KetPsi.Endpoints.Http source generator (build_property.PublishAot / build_property.EnableRequestDelegateGenerator).
+  -->
+  <ItemGroup>
+    <CompilerVisibleProperty Include="PublishAot" />
+    <CompilerVisibleProperty Include="EnableRequestDelegateGenerator" />
+  </ItemGroup>
+</Project>
