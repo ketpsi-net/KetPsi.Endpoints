@@ -14,6 +14,10 @@
   <Folder Name="/.github/workflows/actions/nuget-wait/">
     <File Path=".github/workflows/actions/nuget-wait/action.yml" />
   </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/KetPsi.Endpoints.Http.Benchmarks/KetPsi.Endpoints.Http.Benchmarks.csproj" />
+    <Project Path="benchmarks/KetPsi.Endpoints.Http.AotSmoke/KetPsi.Endpoints.Http.AotSmoke.csproj" />
+  </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".gitignore" />
     <File Path="icon.png" />

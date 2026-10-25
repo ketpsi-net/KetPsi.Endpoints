@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Native AOT smoke test for the KetPsi generated RequestDelegate path and KetPsi.Endpoints.Results.
+      dotnet publish benchmarks/KetPsi.Endpoints.Http.AotSmoke -c Release -r <rid>
+      then run the published executable with the smoke argument (see README)
+    Trimming / AOT warnings (IL2xxx / IL3xxx) fail the publish.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <!-- Show every trim/AOT warning individually and treat them as errors. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
+    <ILLinkTreatWarningsAsErrors>true</ILLinkTreatWarningsAsErrors>
+    <WarningsAsErrors>$(WarningsAsErrors);IL2026;IL2046;IL2057;IL2067;IL2070;IL2072;IL2075;IL2077;IL2080;IL2087;IL2090;IL2091;IL2104;IL3050;IL3051;IL3053</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same handlers/DTOs as the benchmark (single source of truth). -->
+    <Compile Include="..\KetPsi.Endpoints.Http.Benchmarks\Handlers.cs" Link="Handlers.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\KetPsi.Endpoints.Abstractions\KetPsi.Endpoints.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\KetPsi.Endpoints.Results\KetPsi.Endpoints.Results.csproj" />
+    <ProjectReference Include="..\..\src\http\KetPsi.Endpoints.Http\KetPsi.Endpoints.Http.csproj" />
+    <ProjectReference Include="..\..\src\http\KetPsi.Endpoints.Http.Generator\KetPsi.Endpoints.Http.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <CompilerVisibleProperty Include="PublishAot" />
+    <CompilerVisibleProperty Include="EnableRequestDelegateGenerator" />
+  </ItemGroup>
+
+</Project>
