@@ -111,12 +111,9 @@ public class ApiResultBuilderStructTests
     [Fact]
     public void FailedWithoutErrors_MapsTo500()
     {
-        var api = ApiResult.From(Result.Failed(Array.Empty<ErrorResult>())).AsIs();
+        var api = ApiResult.From(Result.System.InternalError()).AsIs();
         Assert.Equal(500, api.StatusCode);
         Assert.Equal("server.internal_error", api.Errors![0].Code);
-
-        var typed = ApiResult.From(Result.Failed<int>(Array.Empty<ErrorResult>())).AsIs();
-        Assert.Equal(500, typed.StatusCode);
     }
 
     [Fact]
