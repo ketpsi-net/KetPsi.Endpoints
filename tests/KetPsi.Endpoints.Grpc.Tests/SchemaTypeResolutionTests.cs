@@ -50,10 +50,11 @@ public class SchemaTypeResolutionTests : IAsyncLifetime
 
     private async Task<string> GetProtoAsync()
     {
-        var response = await _client!.GetAsync("/proto");
+        var response = await _client!.GetAsync("/proto/Codec.proto");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var text = await response.Content.ReadAsStringAsync();
-        Assert.StartsWith("syntax = \"proto3\";", text);
+        Assert.Contains("syntax = \"proto3\";", text);
+        Assert.Contains("package Codec;", text);
         return text;
     }
 
@@ -96,17 +97,12 @@ public class SchemaTypeResolutionTests : IAsyncLifetime
         Assert.Contains("import \"google/protobuf/timestamp.proto\"", proto);
         Assert.Contains("import \"google/protobuf/duration.proto\"", proto);
 
-        // decimal → DecimalValue
-        Assert.Contains("DecimalValue Decimal", proto);
-        Assert.Contains("message DecimalValue", proto);
-        Assert.Contains("int64 units", proto);
-        Assert.Contains("sfixed32 nanos", proto);
-
-        // Guid → bytes
-        Assert.Contains("bytes Guid", proto);
-
-        // char → string
-        Assert.Contains("string Char", proto);
+        // decimal → lossless invariant string; Guid → canonical "D" string; char → uint32 code unit
+        Assert.Contains("string Decimal = ", proto);
+        Assert.DoesNotContain("DecimalValue", proto);
+        Assert.Contains("string Guid = ", proto);
+        Assert.Contains("uint32 Char = ", proto);
+        Assert.DoesNotContain("wrappers.proto", proto);
 
         // bytes
         Assert.Contains("bytes Bytes", proto);
@@ -117,8 +113,8 @@ public class SchemaTypeResolutionTests : IAsyncLifetime
     {
         var proto = await GetProtoAsync();
         Assert.Contains("enum SampleStatus", proto);
-        Assert.Contains("Unknown = 0", proto);
-        Assert.Contains("Active = 1", proto);
+        Assert.Contains("SAMPLE_STATUS_UNKNOWN = 0;", proto);
+        Assert.Contains("SAMPLE_STATUS_ACTIVE = 1;", proto);
         Assert.Contains("SampleStatus Status", proto);
         // should not map enum field as bare int32 type name only without enum
         Assert.DoesNotContain("int32 Status", proto);
@@ -145,23 +141,17 @@ public class SchemaTypeResolutionTests : IAsyncLifetime
         Assert.Contains("NestedItem Child", proto);
         Assert.Contains("NestedItem OptionalChild", proto);
         Assert.Contains("int32 Id", proto);
-        Assert.Contains("DecimalValue Amount", proto);
+        Assert.Contains("string Amount", proto);
     }
 
     [Fact]
-    public async Task Schema_NullableValueTypes_UseWrappers()
+    public async Task Schema_NullableScalars_UseProto3Optional()
     {
         var proto = await GetProtoAsync();
-        // MS docs: int? → google.protobuf.Int32Value etc.
-        // Only asserted if generator emits wrappers for nullable value types
-        if (proto.Contains("NullableScalarsMessage"))
-        {
-            // At minimum the message exists; wrappers preferred
-            Assert.True(
-                proto.Contains("google.protobuf.Int32Value") ||
-                proto.Contains("int32 Int32"),
-                "Nullable Int32 should map to wrapper or int32");
-        }
+        Assert.Contains("optional int32 Int32", proto);
+        Assert.Contains("optional string String", proto);
+        Assert.Contains("optional SampleStatus Status", proto);
+        Assert.DoesNotContain("google.protobuf.Int32Value", proto);
     }
 
     [Fact]

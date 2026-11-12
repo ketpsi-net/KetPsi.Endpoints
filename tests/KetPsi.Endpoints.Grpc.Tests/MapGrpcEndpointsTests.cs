@@ -7,9 +7,6 @@ using Grpc.Net.Client;
 using KetPsi.Endpoints.Abstractions;
 using KetPsi.Endpoints.Grpc;
 using KetPsi.Endpoints.Grpc.Abstractions;
-using KetPsi.Endpoints.Abstractions;
-using KetPsi.Endpoints.Grpc;
-
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -64,42 +61,13 @@ public sealed class MapGrpcEndpointsTests : IClassFixture<WebApplicationFactory<
     }
 
     [Fact]
-    public async Task MappedProxy_FromDi_InvokesHandlerThroughProxy()
-    {
-        using var scope = _factory.Services.CreateScope();
-        var proxy = scope.ServiceProvider.GetRequiredService<Api_Users_Proxy>();
-
-        var response = await proxy.GetByIdAsync(new GetUserRequest { Id = 7 });
-
-        Assert.Equal(7, response.Id);
-        Assert.Equal("User-7", response.Name);
-    }
-
-    [Fact]
-    public async Task MappedProxy_Orders_FromDi_InvokesHandlerThroughProxy()
-    {
-        using var scope = _factory.Services.CreateScope();
-        var proxy = scope.ServiceProvider.GetRequiredService<Api_Orders_Proxy>();
-
-        var response = await proxy.CreateAsync(new CreateOrderRequest
-        {
-            Sku = "SKU-2",
-            Quantity = 1
-        });
-
-        Assert.NotEqual(Guid.Empty, response.OrderId);
-    }
-
-    [Fact]
-    public void MappedEndpoints_ProxiesAndHandlers_AreRegisteredInDi()
+    public void MappedEndpoints_HandlersAreRegisteredInDi()
     {
         using var scope = _factory.Services.CreateScope();
         var sp = scope.ServiceProvider;
 
         Assert.NotNull(sp.GetService<GetUserByIdHandler>());
         Assert.NotNull(sp.GetService<CreateOrderHandler>());
-        Assert.NotNull(sp.GetService<Api_Users_Proxy>());
-        Assert.NotNull(sp.GetService<Api_Orders_Proxy>());
     }
 
     [Fact]
@@ -134,16 +102,15 @@ public sealed class MapGrpcEndpointsTests : IClassFixture<WebApplicationFactory<
     }
 
     [Fact]
-    public void MapGrpc_AllVariants_DoNotThrow()
+    public void MapGrpc_Stubs_AreInertAndDoNotThrow()
     {
         var builder = WebApplication.CreateBuilder();
         builder.AddGrpc();
         var app = builder.Build();
 
-        Assert.Null(Record.Exception(() => app.MapGrpcUnary<GetUserByIdHandler>("Api/Users/GetByIdUnary")));
-        Assert.Null(Record.Exception(() => app.MapGrpcClientStream<CreateOrderHandler>("Orders/CreateClientStream")));
-        Assert.Null(Record.Exception(() => app.MapGrpcServerStream<GetUserByIdHandler>("Api/Users/Stream")));
-        Assert.Null(Record.Exception(() => app.MapGrpcDuplexStream<CreateOrderHandler>("Orders/Duplex")));
+        // The stubs map nothing at runtime (the generator emits the mapping); they must not throw or allocate state.
+        Assert.Null(Record.Exception(() => app.MapGrpcUnary<GetUserByIdHandler>("Stub/Users/GetById")));
+        Assert.Null(Record.Exception(() => app.MapGrpc<GetUserByIdHandler>("Stub/Users/GetByIdIntercepted", b => b.AddInterceptor<FromMetadataPathAndInterceptorTests.NoOpInterceptor>())));
     }
 
     [Fact]

@@ -1,0 +1,70 @@
+// Hand-written mirror of the messages KetPsi generates for package "Edge" (see /proto/Edge.proto).
+// Compiled with Google's protoc (Grpc.Tools) to prove wire interop with a non-KetPsi protobuf runtime.
+syntax = "proto3";
+
+package Edge;
+
+option csharp_namespace = "KetPsi.Interop.Google";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+enum Delta {
+  DELTA_ZERO = 0;
+  DELTA_MINUS = -1;
+  DELTA_PLUS = 1;
+}
+
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_LOW = 1;
+  PRIORITY_HIGH = 2;
+}
+
+message EdgeMessage {
+  string Text = 1;
+  bytes Data = 2;
+  float F = 3;
+  double D = 4;
+  int64 L = 5;
+  uint64 U = 6;
+  int32 I = 7;
+  repeated double Doubles = 8;
+  map<string, NumberMessage> Map = 9;
+  map<int64, string> LongMap = 10;
+  repeated string Tags = 11;
+  repeated int32 RoList = 12;
+  repeated int32 Imm = 13;
+  repeated int32 Arr = 14;
+  optional string Optional = 15;
+}
+
+message EnumMessage {
+  Priority P = 1;
+  Delta D = 2;
+  repeated Delta Ds = 3;
+}
+
+message NumberMessage {
+  int32 Value = 1;
+}
+
+message TemporalMessage {
+  google.protobuf.Timestamp Date = 1; // DateOnly as midnight UTC
+  google.protobuf.Duration Time = 2; // TimeOnly as duration since midnight
+  google.protobuf.Timestamp MaybeDate = 3; // DateOnly as midnight UTC
+  google.protobuf.Duration MaybeTime = 4; // TimeOnly as duration since midnight
+  google.protobuf.Timestamp When = 5;
+  google.protobuf.Timestamp At = 6;
+  google.protobuf.Duration Span = 7;
+  string Money = 8; // decimal as invariant-culture string
+  optional string MaybeMoney = 9; // decimal as invariant-culture string
+  string Id = 10; // Guid as canonical "D" string
+  optional string MaybeId = 11; // Guid as canonical "D" string
+  uint32 Letter = 12; // char as UTF-16 code unit
+}
+
+message TreeNode {
+  int32 Value = 1;
+  TreeNode Child = 2;
+}

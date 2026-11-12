@@ -17,7 +17,7 @@ public class ApiResultFromBuilderTests
         FailedResult domain = Result.Resource.NotFound("gone");
         var api = ApiResult.From(domain).AsIs();
         Assert.Equal(404, api.StatusCode);
-        Assert.Equal("gone", api.Errors[0]!.Message);
+        Assert.Equal("gone", api.Errors![0].Message);
     }
 
     [Fact]
@@ -27,7 +27,7 @@ public class ApiResultFromBuilderTests
         var api = ApiResult.From<Order>(domain).AsIs();
         Assert.Equal(404, api.StatusCode);
         Assert.Null(api.Value);
-        Assert.Equal("gone", api.Errors[0]!.Message);
+        Assert.Equal("gone", api.Errors![0].Message);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class ApiResultFromBuilderTests
     {
         var api = ApiResult.From(Result.Resource.NotFound("gone")).AsIs();
         Assert.Equal(404, api.StatusCode);
-        Assert.Equal("resource.not_found", api.Errors[0]!.Code);
+        Assert.Equal("resource.not_found", api.Errors![0].Code);
         Assert.Equal("gone", api.Errors[0].Message);
         Assert.Equal("NotFound", api.Errors[0].Title);
     }
@@ -122,7 +122,7 @@ public class ApiResultFromBuilderTests
     {
         var api = ApiResult.From(Result.Service.Unavailable("keycloak")).AsIs();
         Assert.Equal(503, api.StatusCode);
-        Assert.StartsWith("integration.keycloak", api.Errors[0]!.Code);
+        Assert.StartsWith("integration.keycloak", api.Errors![0].Code);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public class ApiResultFromBuilderTests
         var api = ApiResult.From(domain).AsIs();
         Assert.Equal(404, api.StatusCode);
         Assert.Null(api.Value);
-        Assert.Equal("missing", api.Errors[0]!.Message);
+        Assert.Equal("missing", api.Errors![0].Message);
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public class ApiResultFromBuilderTests
         var api = ApiResult.From(domain).AsIs();
 
         Assert.Equal(500, api.StatusCode);
-        Assert.Equal("502", api.Errors[0]!.Metadata!["status_code"]);
+        Assert.Equal("502", api.Errors![0].Metadata!["status_code"]);
     }
 
     // ───────────────────────────── Async ─────────────────────────────
@@ -280,7 +280,7 @@ public class ApiResultFromBuilderTests
         var api = await ApiResult.From(vt).AsAsync(o => new OrderDto(o.Id, o.Name));
         Assert.Equal(404, api.StatusCode);
         Assert.Null(api.Value);
-        Assert.Equal("gone", api.Errors[0]!.Message);
+        Assert.Equal("gone", api.Errors![0].Message);
     }
 
     [Fact]
@@ -323,6 +323,6 @@ public class ApiResultFromBuilderTests
         var domain = Result.Failed(ErrorResult.Create(type, "c", "m"));
         var api = ApiResult.From(domain).AsIs();
         Assert.Equal(expectedStatus, api.StatusCode);
-        Assert.Equal(expectedStatus, api.Errors[0]!.StatusCode);
+        Assert.Equal(expectedStatus, api.Errors![0].StatusCode);
     }
 }

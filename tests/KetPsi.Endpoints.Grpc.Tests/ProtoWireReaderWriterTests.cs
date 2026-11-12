@@ -228,7 +228,7 @@ public class ProtoWireReaderWriterTests
     public void TruncatedVarint_Throws()
     {
         // ProtoWireReader is a ref struct — must not capture it in a lambda
-        Assert.Throws<InvalidOperationException>(static () =>
+        Assert.Throws<ProtoWireException>(static () =>
         {
             var r = new ProtoWireReader(new byte[] { 0x80 });
             _ = r.ReadVarint32();
@@ -240,7 +240,7 @@ public class ProtoWireReaderWriterTests
     {
         // fixed32 requires 4 bytes; 2 bytes must throw.
         // Do not call ReadVarint32 — 0x01 is a complete varint.
-        Assert.Throws<InvalidOperationException>(static () =>
+        Assert.Throws<ProtoWireException>(static () =>
         {
             var r = new ProtoWireReader(new byte[] { 0x01, 0x02 });
             _ = r.ReadFixed32();

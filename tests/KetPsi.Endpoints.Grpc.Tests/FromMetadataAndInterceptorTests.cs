@@ -53,7 +53,7 @@ public class FromMetadataPathAndInterceptorTests
         {
             req.Property(x => x.TenantId, p => p.FromMetadata("x-tenant-id"));
         });
-        Assert.Equal(1, builder.Bindings.Count);
+        Assert.Single(builder.Bindings);
         Assert.Contains(builder.Bindings, b => b.Source == GrpcBindingSource.Metadata && b.Key == "x-tenant-id");
         
         

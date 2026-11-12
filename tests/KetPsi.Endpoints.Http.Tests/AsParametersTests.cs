@@ -54,11 +54,10 @@ public class AsParametersTests : IClassFixture<WebApplicationFactory<Program>>
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
 
-        var page = body.GetProperty("page");
-        (page.ValueKind == JsonValueKind.Null || page.GetBoolean() == false).Should().BeTrue();
-
-        var size = body.GetProperty("size");
-        (size.ValueKind == JsonValueKind.Null || size.GetBoolean() == false).Should().BeTrue();
+        // Record defaults: Page = 1, Size = 50 when omitted from query.
+        body.GetProperty("page").GetInt32().Should().Be(1);
+        body.GetProperty("size").GetInt32().Should().Be(50);
+        body.GetProperty("status").GetString().Should().Be("pending");
     }
 
     // -------------------------------------------------

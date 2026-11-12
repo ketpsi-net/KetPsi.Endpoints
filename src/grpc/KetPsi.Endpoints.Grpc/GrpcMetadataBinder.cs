@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using Grpc.Core;
 
 namespace KetPsi.Endpoints.Grpc;
@@ -22,7 +24,7 @@ public static class GrpcMetadataBinder
     }
 
     /// <summary>Tries to read a string metadata entry.</summary>
-    public static bool TryGetString(Metadata headers, string metadataKey, out string value)
+    public static bool TryGetString(Metadata? headers, string metadataKey, out string value)
     {
         value = "";
         if (headers is null || string.IsNullOrEmpty(metadataKey))
@@ -48,7 +50,7 @@ public static class GrpcMetadataBinder
     {
         if (headers is null) return null;
         var s = GetString(headers, metadataKey);
-        return int.TryParse(s, out var v) ? v : null;
+        return int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : null;
     }
 
     /// <summary>Parses a metadata entry as <see cref="long"/>.</summary>
@@ -60,7 +62,7 @@ public static class GrpcMetadataBinder
     {
         if (headers is null) return null;
         var s = GetString(headers, metadataKey);
-        return long.TryParse(s, out var v) ? v : null;
+        return long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : null;
     }
 
     /// <summary>Parses a metadata entry as <see cref="bool"/>.</summary>

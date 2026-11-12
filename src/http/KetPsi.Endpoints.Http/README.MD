@@ -34,7 +34,7 @@ public class GetUserByIdHandler : IEndpoint
 }
 ```
 
-`CancellationToken` is always part of the contract. Return type is `Task<IResult>` (not `ValueTask`).
+`ExecuteAsync` may return `Task<T>`, `ValueTask<T>`, `T`, plain `Task` / `ValueTask` or `void` (200 with an empty body). `IResult` results are executed, `string` is written as `text/plain`, anything else as JSON.
 
 ### 2. Map it
 
@@ -47,7 +47,7 @@ app.MapGet<GetUserByIdHandler>("/users/{id}")
 
 ```csharp
 // Program.cs
-builder.Services.AddHttpEndpoints();   // generated – registers all handlers
+builder.Services.AddHttpEndpoints();   // generated – registers all handlers (TryAddTransient: one instance per request, your own registration wins)
 // ...
 app.MapHttpEndpoints();                // generated – maps all endpoints
 ```
@@ -91,27 +91,73 @@ group.MapGet("current",
 
 This keeps the handler return type visible to the C# compiler and to ASP.NET Core’s `RequestDelegateFactory`.
 
-#### Native AOT (`PublishAot=true`)
+#### KetPsi request-delegate path (Native AOT / optional opt-in)
 
-When the consuming project publishes with `<PublishAot>true</PublishAot>`, the package injects `<CompilerVisibleProperty Include="PublishAot" />` so the generator can see the flag. In that mode it emits **`async` / `await`**:
+Official ASP.NET **RDG does not see** endpoints emitted by third-party generators, so under `PublishAot` those endpoints would fall back to runtime **RDF** and break. KetPsi therefore owns its own compile-time request-delegate path when:
+
+- `<PublishAot>true</PublishAot>`, or
+- `<EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>`
+
+The same `EnableRequestDelegateGenerator` property is what ASP.NET uses for its own RDG on **user-written** `MapGet`/`MapPost` lambdas. Microsoft’s generator never intercepts KetPsi’s emitted `Map*` / `MapMethods` calls, so reusing the flag is safe and avoids a second opt-in.
+
+In that mode the generator maps the endpoint with **`MapMethods` + a request delegate built at endpoint build time** instead of a Minimal API `Delegate` lambda (simplified):
 
 ```csharp
-group.MapGet("current",
-    async global::System.Threading.Tasks.Task<global::KetPsi.Results.Result<global::My.Contracts.RealmContract>>
-    (global::System.Threading.CancellationToken @cancellationToken,
-     [FromServices] global::My.Handlers.GetCurrentRealmHandler handler)
-    => await handler.ExecuteAsync(@cancellationToken));
+var b = KetPsiEndpoint.Map(group, "/users/{id}", HttpVerbs.Get, __kp_Metadata_0); // metadata convention runs first
+b.WithName("GetUserById");                                                       // your conventions
+KetPsiEndpoint.Complete(b, __kp_Build_0);                                        // build convention runs last
+
+static void __kp_Build_0(EndpointBuilder eb)
+{
+    var env = EndpointEnvironment.Create(eb);             // ThrowOnBadRequest, JsonOptions, final route pattern – once per endpoint
+    var idFromRoute = env.HasRouteParameter("id");        // includes MapGroup prefixes
+    eb.RequestDelegate = ctx =>                           // no filters: no closure / context allocation per request
+    {
+        int id = default;
+        var s = idFromRoute ? ParameterBinder.GetRouteValue(ctx, "id") : (string?)ctx.Request.Query["id"];
+        if (string.IsNullOrEmpty(s)) { BindingFailure.Required(ctx, env, "int", "id", "route"); return Task.CompletedTask; }
+        if (!ParameterBinder.TryParse<int>(s, out id)) { BindingFailure.Invalid(ctx, env, "int", "id", s); return Task.CompletedTask; }
+        var handler = ctx.RequestServices.GetRequiredService<GetUserByIdHandler>();
+        return ResultExecutor.ExecuteResultTaskAsync<IResult>(ctx, handler.ExecuteAsync(id, ctx.RequestAborted));
+    };
+}
 ```
 
-Awaiting inside the lambda avoids `RequestDelegateFactory` requesting JSON metadata for `Task<T>` itself (a common Native AOT failure with source-generated serializers). Still register the **unwrapped** payload types (`ApiResult<T>`, `T`, …) on your `JsonSerializerContext`—not `Task<T>`.
+**What this covers (same semantics as Minimal APIs)**
 
-If you reference the generator via a project reference instead of the NuGet package, add this to the **app** project (or a shared `Directory.Build.props`):
+| Concern | Behavior |
+|--------|----------|
+| Simple types | `string`, all numeric primitives, `decimal`, `bool`, `char`, `Guid`, `DateTime(Offset)`, `DateOnly`, `TimeOnly`, `TimeSpan`, enums (case-insensitive), `Uri`, `Nullable<T>` of these, any `IParsable<T>` / static `TryParse` type; arrays and `List<T>` of them plus `StringValues` from query / header / form |
+| Sources | `[FromRoute/Query/Header/Form(Name = …)]`, `[FromBody]`, `[FromServices]`, `[FromKeyedServices(key)]`, `[AsParameters]`; inferred: route when the final pattern (incl. group prefixes, `{id?}`, `{*path}`, constraints) has the name, else query |
+| Special types | `HttpContext`, `HttpRequest`, `HttpResponse`, `ClaimsPrincipal`, `CancellationToken`, `Stream`, `PipeReader`, `IFormFile`, `IFormFileCollection`, `IFormCollection`; types with `BindAsync` |
+| Complex types | Registered services are injected (`IServiceProviderIsService`); otherwise JSON body on POST/PUT/PATCH (GET/DELETE throws at startup, like RDF) |
+| Required / optional | Non-nullable without default → 400 when missing; `T?` → null; default values are honored; unparsable values → 400 (status only, or `BadHttpRequestException` when `RouteHandlerOptions.ThrowOnBadRequest` is on, as in Development) |
+| Body | JSON content type required (else 415); empty required body → 400; malformed JSON → 400; `JsonTypeInfo<T>` resolved once per endpoint from the host `JsonOptions` |
+| Results | `IResult` (null throws like RDF); `string` → `text/plain`; other `T` → JSON (runtime-type contract for non-polymorphic base types); `Task` / `ValueTask` / `void` → 200 empty |
+| Metadata | `MethodInfo`, parameter binding metadata, `Accepts`/`Produces`, `IEndpoint(Parameter)MetadataProvider` → ApiExplorer / OpenAPI describe the endpoint like a Minimal API |
+| Antiforgery | Form-bound endpoints get antiforgery-required metadata and reject invalid tokens with 400; `.DisableAntiforgery()` still wins |
+| Filters | Group filters (outer) → endpoint filters → handler, with the bound arguments in `EndpointFilterInvocationContext.Arguments` (and modifiable). Nothing is allocated for filters when none are configured |
+| Unsupported | A compile-time error (`KP107`–`KP109`) – a parameter is never silently `default` |
+
+The hot path (bind route/query scalars → static handler → cached `IResult`) does not allocate.
+
+Handler instances: handlers with constructor dependencies are resolved from `RequestServices` (registered with
+`TryAddTransient`, so your own registration wins). Handlers whose only constructor is a public parameterless one are
+created directly without touching the request scope, and stateless ones (no instance fields, not disposable) are
+cached once per endpoint.
+
+Still register JSON payload types on your `JsonSerializerContext` under Native AOT; a missing registration fails when the endpoint is built (like RDG), not per request.
+
+The package ships `build/KetPsi.Endpoints.Http.props` (and `buildTransitive`) that make both flags visible to the generator. Project-reference consumers add the same items themselves:
 
 ```xml
 <ItemGroup>
   <CompilerVisibleProperty Include="PublishAot" />
+  <CompilerVisibleProperty Include="EnableRequestDelegateGenerator" />
 </ItemGroup>
 ```
+
+**Benchmarks:** `benchmarks/KetPsi.Endpoints.Http.Benchmarks` compares KetPsi RD vs classic Minimal API + official RDG (BenchmarkDotNet memory diagnoser + optional `--throughput` probe for RPS / alloc / CPU).
 
 ---
 
@@ -242,7 +288,7 @@ public record CustomerFilter(
 
 ### 2. Non-nullable value types are required
 
-A missing query value for `bool IncludeReserved` yields **400**, even if the record has `= false`.
+A missing query value for a non-nullable `bool IncludeReserved` yields **400**. On the KetPsi request-delegate path a constructor default (`= false`) is honored (Minimal API `[AsParameters]` semantics); the classic path binds through a surrogate struct, where it is not. Settable properties without a constructor default are always required when non-nullable.
 
 **Wrong**
 
@@ -296,7 +342,32 @@ admin.MapDelete<DeleteUserHandler>("/users/{id}")
      .WithName("AdminDeleteUser");
 ```
 
-The generator tracks `MapGroup`  chains and emits mapping under the correct group variable.
+The generator tracks `MapGroup` chains and emits mapping under the correct group variable.
+
+### Helper methods
+
+`Map*` calls inside your own helpers are resolved through their call sites, including extension (reduced) calls and named arguments:
+
+```csharp
+public static void MapUsers(this RouteGroupBuilder group, string prefix = "/users")
+    => group.MapGet<GetUserByIdHandler>(prefix + "/{id}");
+
+app.MapGroup("/api").MapUsers();          // → /api/users/{id}
+```
+
+Arguments that flow into routes or conventions must be constants or static members. Route expressions and
+convention arguments are re-emitted fully qualified (constants are folded into escaped literals), so non-constant
+routes such as `static readonly` fields work. If something cannot be re-emitted the generator reports a diagnostic
+instead of silently dropping the endpoint:
+
+| Id | Meaning |
+|----|---------|
+| KP104 | The Map call (or the group it is mapped on) could not be resolved – no endpoint generated |
+| KP105 | An `IEndpointRouteBuilder` helper has no call sites – mapped on the application root |
+| KP106 | A route / convention argument references a local, a parameter or an instance member (error) |
+| KP107 | A parameter type cannot be bound on the request-delegate path (error) |
+| KP108 | `[FromKeyedServices]` without a key (error) |
+| KP109 | More than one body / form source (error) |
 
 ---
 

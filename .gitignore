@@ -237,3 +237,6 @@ _Pvt_Extensions
 # FAKE - F# Make
 .fake/
 /src/Presentation/AtiyanSeir.Payment.HttpApi/.config
+
+# BenchmarkDotNet output
+BenchmarkDotNet.Artifacts/

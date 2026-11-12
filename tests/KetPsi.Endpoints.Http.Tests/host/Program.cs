@@ -5,23 +5,23 @@ using Microsoft.Extensions.DependencyInjection;
 
 var arguments = args.Where(x => !x.StartsWith("--contentRoot")).ToList();
 arguments.Add($"--contentRoot={AppContext.BaseDirectory}");
- var builder = WebApplication.CreateBuilder(arguments.ToArray());
+var builder = WebApplication.CreateBuilder(arguments.ToArray());
 
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddKeyedScoped<IBlobStorage, PrimaryBlobStorage>("primary");
 builder.Services.AddKeyedScoped<IBlobStorage, SecondaryBlobStorage>("secondary");
 
+builder.Services.AddLogging();
+builder.Services.AddAntiforgery();
 builder.Services.AddHttpEndpoints();
-
 
 builder.Services.AddEndpointsApiExplorer();
 
 var app = builder.Build();
 
-
 app.UseHttpsRedirection();
+app.UseAntiforgery();
 
 app.MapHttpEndpoints();
 
 await app.RunAsync();
-

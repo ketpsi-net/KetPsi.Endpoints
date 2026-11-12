@@ -1,272 +1,239 @@
-using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
 
 namespace KetPsi.Endpoints.Grpc.Generator;
 
-internal sealed class TypeConfigModel
-{
-    public string ConfigClassName { get; }
-    public string TargetTypeName { get; }
-    /// <summary>Property name → field number from Configure(... Property(x => x.Foo, n)).</summary>
-    public System.Collections.Immutable.ImmutableArray<(string Name, int Number)> Fields { get; }
-    /// <summary>Property name → metadata key from Configure(... FromMetadata(x => x.Foo, "key")).</summary>
-    public System.Collections.Immutable.ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> MetadataBindings { get; }
-    /// <summary>Fully-qualified interceptor type names from AddInterceptor&lt;T&gt;().</summary>
-    public System.Collections.Immutable.ImmutableArray<string> Interceptors { get; }
-    /// <summary>Static factory method name for deserialization (InstantiateWith).</summary>
-    public string? FactoryMethodName { get; }
-    /// <summary>Optional declaring type FQN when factory is not on the target type.</summary>
-    public string? FactoryDeclaringTypeName { get; }
+// All models are value-equatable records (strings, enums, nested records and EquatableArray only)
+// so incremental generator steps cache across unrelated edits.
 
-    public TypeConfigModel(
-        string configClassName,
-        string targetTypeName,
-        System.Collections.Immutable.ImmutableArray<(string Name, int Number)> fields = default,
-        System.Collections.Immutable.ImmutableArray<(string Name, string Source, string Key, string ClrTypeHint)> metadataBindings = default,
-        System.Collections.Immutable.ImmutableArray<string> interceptors = default,
-        string? factoryMethodName = null,
-        string? factoryDeclaringTypeName = null)
+internal sealed record LocationInfo(string FilePath, TextSpan Span, LinePositionSpan LineSpan)
+{
+    public Location ToLocation() => Location.Create(FilePath, Span, LineSpan);
+
+    public static LocationInfo? From(SyntaxNode? node)
     {
-        ConfigClassName = configClassName;
-        TargetTypeName = targetTypeName;
-        Fields = fields.IsDefault ? System.Collections.Immutable.ImmutableArray<(string, int)>.Empty : fields;
-        MetadataBindings = metadataBindings.IsDefault
-            ? System.Collections.Immutable.ImmutableArray<(string, string, string, string)>.Empty
-            : metadataBindings;
-        Interceptors = interceptors.IsDefault
-            ? System.Collections.Immutable.ImmutableArray<string>.Empty
-            : interceptors;
-        FactoryMethodName = factoryMethodName;
-        FactoryDeclaringTypeName = factoryDeclaringTypeName;
+        if (node is null)
+            return null;
+        var loc = node.GetLocation();
+        if (loc.SourceTree is null)
+            return null;
+        return new LocationInfo(loc.SourceTree.FilePath, loc.SourceSpan, loc.GetLineSpan().Span);
     }
 }
 
-internal enum FieldKind
+internal sealed record DiagnosticInfo(string Id, LocationInfo? Location, EquatableArray<string> Args)
 {
-    Unknown = 0,
+    public static DiagnosticInfo Create(DiagnosticDescriptor descriptor, LocationInfo? location, params string[] args)
+        => new(descriptor.Id, location, args.ToEquatableArray());
+
+    public Diagnostic ToDiagnostic()
+        => Diagnostic.Create(Diagnostics.ById(Id), Location?.ToLocation() ?? Microsoft.CodeAnalysis.Location.None,
+            Args.Select(a => (object)a).ToArray());
+}
+
+internal enum ValueKind
+{
+    None = 0,
+    Bool,
     Int32,
     Int64,
     UInt32,
     UInt64,
-    Bool,
     Float,
     Double,
     String,
     Bytes,
+    Char,
+    Enum,
+    Guid,
+    Decimal,
+    DateTime,
+    DateTimeOffset,
+    DateOnly,
+    TimeSpan,
+    TimeOnly,
+    Message,
+}
+
+/// <summary>A single (non-collection) protobuf value.</summary>
+/// <param name="Kind">Wire/value category.</param>
+/// <param name="ClrType">Fully qualified CLR type (global::…, keywords for primitives), without nullable suffix.</param>
+/// <param name="RefKey">Message / enum key (same as ClrType) when Kind is Message / Enum.</param>
+/// <param name="IsValueType">True for structs (relevant for messages and nullability).</param>
+internal sealed record ValueInfo(ValueKind Kind, string ClrType, string RefKey, bool IsValueType);
+
+internal enum FieldShape
+{
+    Single,
+    Repeated,
+    Map,
+}
+
+internal enum CollectionKind
+{
+    None,
+    Array,
+    List,               // List<T>
+    IndexedInterface,   // IList<T>, IReadOnlyList<T>  -> List<T>
+    EnumerableInterface,// IEnumerable<T>, ICollection<T>, IReadOnlyCollection<T> -> List<T>
+    HashSet,            // HashSet<T>
+    SetInterface,       // ISet<T>, IReadOnlySet<T> -> HashSet<T>
+    ImmutableArray,
+    ImmutableList,
+    Dictionary,         // Dictionary<K,V>
+    DictionaryInterface,// IDictionary<K,V>, IReadOnlyDictionary<K,V> -> Dictionary<K,V>
+}
+
+internal enum SetterKind
+{
+    None,
+    Set,
+    Init,
+}
+
+internal sealed record FieldModel(
+    string Name,
+    int Order,
+    int? AttributeNumber,
+    FieldShape Shape,
+    ValueInfo Value,
+    ValueInfo? MapKey,
+    bool IsNullable,
+    CollectionKind Collection,
+    string PropertyClrType,
+    SetterKind Setter,
+    bool IsRequired,
+    string? UnsupportedReason);
+
+internal sealed record CtorParamModel(string Name, string MatchedProperty, bool HasDefault);
+
+internal sealed record CtorModel(EquatableArray<CtorParamModel> Parameters, bool SetsRequiredMembers);
+
+internal sealed record MessageModel(
+    string Key,
+    string ClrType,
+    string BaseName,
+    string Namespace,
+    string OpenGenericKey,
+    bool IsValueType,
+    bool IsReferenceType,
+    string? UnsupportedReason,
+    EquatableArray<FieldModel> Fields,
+    EquatableArray<CtorModel> Constructors);
+
+internal sealed record EnumMemberModel(string Name, string Value);
+
+internal sealed record EnumModel(
+    string Key,
+    string ClrType,
+    string BaseName,
+    string Namespace,
+    EquatableArray<EnumMemberModel> Members,
+    string? OutOfRangeMember);
+
+internal enum RpcKind
+{
+    Unary,
+    ClientStreaming,
+    ServerStreaming,
+    DuplexStreaming,
+}
+
+internal enum HandlerReturnKind
+{
+    Task,           // Task<T>
+    ValueTask,      // ValueTask<T>
+    Sync,           // T
+    TaskVoid,       // Task
+    ValueTaskVoid,  // ValueTask
+    Void,           // void
+    AsyncEnumerable // IAsyncEnumerable<T>
+}
+
+internal enum BindingParseKind
+{
+    String,
+    Int32,
+    Int64,
+    Int16,
+    Byte,
+    SByte,
+    UInt16,
+    UInt32,
+    UInt64,
+    Single,
+    Double,
+    Decimal,
+    Bool,
     Guid,
     DateTime,
+    DateTimeOffset,
     TimeSpan,
-    Decimal,
+    DateOnly,
+    TimeOnly,
+    Char,
     Enum,
-    Message,
-    Repeated,
-    Map
 }
 
-internal sealed class ProtoFieldModel
+internal sealed record BindingModel(
+    string RequestKey,
+    string Property,
+    string HeaderKey,
+    BindingParseKind Parse,
+    string ClrType);
+
+internal sealed record ConventionModel(
+    string Namespace,
+    EquatableArray<string> RootUsings,
+    EquatableArray<string> NamespaceUsings,
+    string Chain,
+    string UniqueId);
+
+internal sealed record EndpointModel(
+    string Package,
+    string Service,
+    string Method,
+    RpcKind Kind,
+    string HandlerType,
+    string RequestType,
+    string ResponseType,
+    HandlerReturnKind ReturnKind,
+    bool HasRequestParameter,
+    bool PassesCancellationToken,
+    EquatableArray<MessageModel> Messages,
+    EquatableArray<EnumModel> Enums,
+    EquatableArray<string> InlineInterceptors,
+    EquatableArray<BindingModel> InlineBindings,
+    string? ExplicitConfigType,
+    ConventionModel? Conventions,
+    LocationInfo? Location)
 {
-    public string Name { get; }
-    public int Number { get; }
-    public string ProtoType { get; }
-    /// <summary>Full CLR type for codegen casts (e.g. byte, sbyte, char, int[], List&lt;int&gt;).</summary>
-    public string ClrTypeHint { get; }
-    public bool IsNullable { get; }
-    public FieldKind Kind { get; }
-    public string ElementProtoType { get; }
-    public string ElementClrHint { get; }
-    public FieldKind ElementKind { get; }
-    /// <summary>True when the property is T[] (not List/IList).</summary>
-    public bool IsArray { get; }
-    public string MapKeyProtoType { get; }
-    public string MapKeyClrHint { get; }
-    public FieldKind MapKeyKind { get; }
-
-    public ProtoFieldModel(
-        string name,
-        int number,
-        string protoType,
-        string clrTypeHint = "",
-        bool isNullable = false,
-        FieldKind kind = FieldKind.Unknown,
-        string elementProtoType = "",
-        string elementClrHint = "",
-        FieldKind elementKind = FieldKind.Unknown,
-        bool isArray = false,
-        string mapKeyProtoType = "",
-        string mapKeyClrHint = "",
-        FieldKind mapKeyKind = FieldKind.Unknown)
-    {
-        Name = name;
-        Number = number;
-        ProtoType = protoType;
-        ClrTypeHint = clrTypeHint ?? "";
-        IsNullable = isNullable;
-        Kind = kind;
-        ElementProtoType = elementProtoType ?? "";
-        ElementClrHint = elementClrHint ?? "";
-        ElementKind = elementKind;
-        IsArray = isArray;
-        MapKeyProtoType = mapKeyProtoType ?? "";
-        MapKeyClrHint = mapKeyClrHint ?? "";
-        MapKeyKind = mapKeyKind;
-    }
+    public string ServiceFullName => Package + "." + Service;
 }
 
-internal sealed class EnumDefinitionModel
-{
-    public string Name { get; }
-    public string ClrTypeName { get; }
-    public System.Collections.Immutable.ImmutableArray<(string Name, int Value)> Members { get; }
+internal sealed record CallSiteResult(EndpointModel? Endpoint, EquatableArray<DiagnosticInfo> Diagnostics);
 
-    public EnumDefinitionModel(string name, string clrTypeName, System.Collections.Immutable.ImmutableArray<(string Name, int Value)> members)
-    {
-        Name = name;
-        ClrTypeName = clrTypeName;
-        Members = members;
-    }
-}
+internal sealed record ConfiguredField(string Name, int Number, LocationInfo? Location);
 
-internal sealed class NestedMessageModel
-{
-    public string ClrTypeName { get; }
-    public string MessageName { get; }
-    public System.Collections.Immutable.ImmutableArray<ProtoFieldModel> Fields { get; }
-    public bool IsReferenceType { get; }
+internal sealed record FactoryModel(string MethodName, string? DeclaringType, EquatableArray<string> ParameterNames);
 
-    public NestedMessageModel(string clrTypeName, string messageName, System.Collections.Immutable.ImmutableArray<ProtoFieldModel> fields, bool isReferenceType)
-    {
-        ClrTypeName = clrTypeName;
-        MessageName = messageName;
-        Fields = fields;
-        IsReferenceType = isReferenceType;
-    }
-}
+internal sealed record ProtoTypeConfigModel(
+    string ConfigType,
+    string TargetKey,
+    bool IsOpenGeneric,
+    EquatableArray<ConfiguredField> Fields,
+    FactoryModel? Factory,
+    LocationInfo? Location);
 
-internal sealed class GrpcEndpointModel
-{
-    public string HandlerName { get; }
-    public string HandlerFullyQualifiedName { get; }
-    public string RequestTypeName { get; }
-    public string ResponseTypeName { get; }
-    public string GrpcRoute { get; }
-    public string MethodName { get; }
-    public bool IsStream { get; }
-    public bool AcceptsCancellationToken { get; }
-    public ImmutableArray<string> ClosedGenerics { get; }
+internal sealed record EndpointConfigModel(
+    string ConfigType,
+    string HandlerKey,
+    EquatableArray<string> Interceptors,
+    EquatableArray<BindingModel> Bindings);
 
-    public string PackageName { get; }
-    public string ServiceNameOnly { get; }
-    public string RequestMessageName { get; }
-    public string ResponseMessageName { get; }
-    public ImmutableArray<ProtoFieldModel> RequestFields { get; }
-    public ImmutableArray<ProtoFieldModel> ResponseFields { get; }
-    public ImmutableArray<NestedMessageModel> NestedMessages { get; }
-    public ImmutableArray<EnumDefinitionModel> Enums { get; }
+internal sealed record ConfigResult(
+    EquatableArray<ProtoTypeConfigModel> ProtoConfigs,
+    EquatableArray<EndpointConfigModel> EndpointConfigs,
+    EquatableArray<DiagnosticInfo> Diagnostics);
 
-    public string FinalGrpcRoute => GrpcRoute;
-
-    /// <summary>
-    /// Used by the proxy/contract generator.
-    /// </summary>
-    public GrpcEndpointModel(
-        string handlerName,
-        string handlerFullyQualifiedName,
-        string requestTypeName,
-        string responseTypeName,
-        string grpcRoute,
-        string methodName,
-        bool acceptsCancellationToken)
-    {
-        HandlerName = handlerName;
-        HandlerFullyQualifiedName = handlerFullyQualifiedName;
-        RequestTypeName = requestTypeName;
-        ResponseTypeName = responseTypeName;
-        GrpcRoute = grpcRoute;
-        MethodName = methodName;
-        AcceptsCancellationToken = acceptsCancellationToken;
-        IsStream = false;
-        ClosedGenerics = ImmutableArray<string>.Empty;
-        PackageName = "";
-        ServiceNameOnly = "";
-        RequestMessageName = SimpleTypeName(requestTypeName);
-        ResponseMessageName = SimpleTypeName(UnwrapTask(responseTypeName));
-        RequestFields = ImmutableArray<ProtoFieldModel>.Empty;
-        ResponseFields = ImmutableArray<ProtoFieldModel>.Empty;
-        NestedMessages = ImmutableArray<NestedMessageModel>.Empty;
-        Enums = ImmutableArray<EnumDefinitionModel>.Empty;
-    }
-
-    /// <summary>
-    /// Used by the registration generator (includes schema field data).
-    /// </summary>
-    public GrpcEndpointModel(
-        string handlerName,
-        string handlerFullyQualifiedName,
-        string requestTypeName,
-        string responseTypeName,
-        string grpcRoute,
-        string methodName,
-        bool isStream,
-        ImmutableArray<string> closedGenerics,
-        string packageName,
-        string serviceNameOnly,
-        string requestMessageName,
-        string responseMessageName,
-        ImmutableArray<ProtoFieldModel> requestFields,
-        ImmutableArray<ProtoFieldModel> responseFields,
-        ImmutableArray<NestedMessageModel> nestedMessages = default,
-        ImmutableArray<EnumDefinitionModel> enums = default)
-    {
-        HandlerName = handlerName;
-        HandlerFullyQualifiedName = handlerFullyQualifiedName;
-        RequestTypeName = requestTypeName;
-        ResponseTypeName = responseTypeName;
-        GrpcRoute = grpcRoute;
-        MethodName = methodName;
-        IsStream = isStream;
-        ClosedGenerics = closedGenerics;
-        AcceptsCancellationToken = false;
-        PackageName = packageName;
-        ServiceNameOnly = serviceNameOnly;
-        RequestMessageName = requestMessageName;
-        ResponseMessageName = responseMessageName;
-        RequestFields = requestFields;
-        ResponseFields = responseFields;
-        NestedMessages = nestedMessages.IsDefault ? ImmutableArray<NestedMessageModel>.Empty : nestedMessages;
-        Enums = enums.IsDefault ? ImmutableArray<EnumDefinitionModel>.Empty : enums;
-    }
-
-    private static string UnwrapTask(string typeName)
-    {
-        // Task<T> / ValueTask<T> / global::System.Threading.Tasks.Task<T>
-        var s = typeName;
-        const string taskPrefix = "System.Threading.Tasks.Task<";
-        const string valueTaskPrefix = "System.Threading.Tasks.ValueTask<";
-        const string globalTask = "global::System.Threading.Tasks.Task<";
-        const string globalValueTask = "global::System.Threading.Tasks.ValueTask<";
-
-        foreach (var prefix in new[] { globalTask, globalValueTask, taskPrefix, valueTaskPrefix })
-        {
-            var idx = s.IndexOf(prefix, StringComparison.Ordinal);
-            if (idx >= 0)
-            {
-                var start = idx + prefix.Length;
-                var end = s.LastIndexOf('>');
-                if (end > start)
-                    return s.Substring(start, end - start).Trim();
-            }
-        }
-
-        return s;
-    }
-
-    private static string SimpleTypeName(string fullyQualified)
-    {
-        var s = UnwrapTask(fullyQualified);
-        var lastDot = s.LastIndexOf('.');
-        var name = lastDot >= 0 ? s.Substring(lastDot + 1) : s;
-        var generic = name.IndexOf('<');
-        if (generic >= 0)
-            name = name.Substring(0, generic);
-        return name.Replace("+", "_");
-    }
-}
+internal sealed record AssemblyInfo(string AssemblyName, bool ReferencesRuntime, EquatableArray<string> ReferencedRegistrations);

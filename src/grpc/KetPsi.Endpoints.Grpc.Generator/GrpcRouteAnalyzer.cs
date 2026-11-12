@@ -20,7 +20,7 @@ public sealed class GrpcRouteAnalyzer : DiagnosticAnalyzer
     private static readonly DiagnosticDescriptor Rule = new(
         id: DiagnosticId,
         title: "Invalid gRPC Route Format",
-        messageFormat: "The gRPC route '{0}' is invalid. It must contain at least 2 non-empty, non-parameter segments separated by '/' (e.g. 'Service/Method' or 'area/Service/Method'). Empty segments and a leading/trailing '/' are not allowed. Route parameters like '{{id}}' are ignored when counting.",
+        messageFormat: "The gRPC route '{0}' is invalid: {1}. Routes need at least 2 non-parameter segments (Service/Method) counting MapGroup prefixes, every segment must be a protobuf identifier ([A-Za-z_][A-Za-z0-9_]*), and empty segments or a leading/trailing '/' are not allowed.",
         category: Category,
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -39,49 +39,34 @@ public sealed class GrpcRouteAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeMethodInvocation(SyntaxNodeAnalysisContext context)
     {
         var invocation = (InvocationExpressionSyntax)context.Node;
+        if (invocation.Expression is not MemberAccessExpressionSyntax { Name.Identifier.ValueText: var name }
+            || !name.StartsWith("MapGrpc", StringComparison.Ordinal) || name is "MapGrpcService" or "MapGrpcEndpoints")
+            return;
 
+        // Covers MapGrpc<T>(...) and MapGrpc<TEndpoint, TConfig>(...) alike.
         if (context.SemanticModel.GetSymbolInfo(invocation, context.CancellationToken).Symbol is not IMethodSymbol methodSymbol ||
-            !methodSymbol.Name.StartsWith("MapGrpc", StringComparison.Ordinal))
+            !methodSymbol.Name.StartsWith("MapGrpc", StringComparison.Ordinal) || methodSymbol.TypeArguments.Length is < 1 or > 2)
+            return;
+
+        var argument = invocation.ArgumentList.Arguments.FirstOrDefault(a => a.NameColon?.Name.Identifier.ValueText == "route")
+                       ?? invocation.ArgumentList.Arguments.FirstOrDefault(a => a.NameColon is null);
+        if (argument is null)
+            return;
+        if (context.SemanticModel.GetConstantValue(argument.Expression, context.CancellationToken).Value is not string routeValue)
+            return; // non-constant routes are reported by the generator (KPG001)
+
+        var receiver = RouteResolver.ResolveReceiver(invocation, context.SemanticModel, context.CancellationToken);
+        var location = argument.Expression.GetLocation();
+        var badPrefix = RouteResolver.InvalidPrefixSegment(receiver.Prefixes, receiver.Version);
+        if (badPrefix is not null)
         {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, location, routeValue,
+                $"MapGroup/WithGroupName segment '{badPrefix}' is not a valid protobuf identifier"));
             return;
         }
 
-        var argument = invocation.ArgumentList.Arguments.FirstOrDefault();
-        if (argument?.Expression is not LiteralExpressionSyntax literalExpression ||
-            !literalExpression.IsKind(SyntaxKind.StringLiteralExpression))
-        {
-            return;
-        }
-
-        var routeValue = literalExpression.Token.ValueText;
-        if (string.IsNullOrWhiteSpace(routeValue))
-        {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, literalExpression.GetLocation(), routeValue ?? ""));
-            return;
-        }
-
-        // Keep empty entries so leading/trailing/duplicate '/' are detected
-        var segments = routeValue.Split('/');
-        if (segments.Any(s => s.Length == 0))
-        {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, literalExpression.GetLocation(), routeValue));
-            return;
-        }
-
-        var meaningful = 0;
-        foreach (var s in segments)
-        {
-            if (s.Length >= 2 && s[0] == '{' && s[s.Length - 1] == '}')
-                continue;
-            if (string.IsNullOrWhiteSpace(s))
-                continue;
-            meaningful++;
-        }
-
-        // At least service + method; no maximum (MapGroup adds package prefix segments separately)
-        if (meaningful < 2)
-        {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, literalExpression.GetLocation(), routeValue));
-        }
+        var reason = RouteResolver.ValidateRelativeRoute(routeValue, RouteResolver.CountSegments(receiver.Prefixes));
+        if (reason is not null)
+            context.ReportDiagnostic(Diagnostic.Create(Rule, location, routeValue, reason));
     }
 }

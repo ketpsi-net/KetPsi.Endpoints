@@ -93,7 +93,7 @@ KetPsi.Endpoints.Grpc                ← runtime + generators
 
 ## Compatibility
 
-- Target frameworks aligned with `KetPsi.Endpoints.Grpc` (`net8.0+`)
+- Target frameworks aligned with `KetPsi.Endpoints.Grpc` (`net9.0+`)
 - Namespace: `KetPsi.Endpoints.Grpc.Abstractions`
 ```
 

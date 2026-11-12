@@ -6,5 +6,6 @@ namespace KetPsi.Endpoints.Grpc.Abstractions;
 /// </summary>
 public interface IOpenProtoTypeConfiguration
 {
+    /// <summary>Configures open generic types (read by the source generator at compile time; never executed).</summary>
     void Configure(IOpenProtoTypeBuilder builder);
 }

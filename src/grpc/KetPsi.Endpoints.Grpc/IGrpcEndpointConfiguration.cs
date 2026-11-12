@@ -103,7 +103,7 @@ internal sealed class GrpcEndpointBuilder<TEndpoint> : GrpcEndpointBuilder, IGrp
     }
 }
 
-/// <summary>Collects <see cref="FromMetadata"/> bindings for a request DTO.</summary>
+/// <summary>Collects <c>FromMetadata</c> bindings for a request DTO.</summary>
 internal sealed class GrpcRequestBinder<TRequest> : IGrpcRequestBinder<TRequest>
 {
     private readonly List<GrpcBindingRegistration> _bindings;
