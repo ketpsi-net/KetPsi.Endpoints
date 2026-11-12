@@ -3,7 +3,7 @@
 	<Import Project="../../../version.props"></Import>
 
 	<PropertyGroup>
-		<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+		<TargetFrameworks>net9.0;net10.0;net11.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<Description>Code-first gRPC endpoints for KetPsi (compile-time codecs, no protobuf-net)</Description>
@@ -13,8 +13,8 @@
 
 	<ItemGroup>
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
-		<PackageReference Include="Grpc.AspNetCore.Server" Version="2.84.0" />
-		<PackageReference Include="Grpc.Net.Common" Version="2.84.0" />
+		<PackageReference Include="Grpc.AspNetCore.Server" Version="2.85.0" />
+		<PackageReference Include="Grpc.Net.Common" Version="2.85.0" />
 	</ItemGroup>
 
 	<!--

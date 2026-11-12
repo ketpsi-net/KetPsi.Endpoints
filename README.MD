@@ -1,7 +1,7 @@
 # KetPsi.Endpoints
 
 [![NuGet](https://img.shields.io/nuget/v/KetPsi.Endpoints.Abstractions.svg)](https://www.nuget.org/packages/KetPsi.Endpoints.Abstractions/)
-[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-9.0%20%7C%2010.0%20%7C%2011.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 

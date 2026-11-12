@@ -159,7 +159,7 @@ public sealed class CreateOrderConfig : IGrpcEndpointConfiguration<CreateOrderHa
 ## Robustness, AOT and performance
 
 - **Malformed input:** returns `RpcException(StatusCode.InvalidArgument)`, with `ProtoWireException` inside. Nesting is limited to 100 levels (`ProtoWireLimits.MaxDepth`), so cyclic graphs fail instead of overflowing the stack.
-- **AOT and trimming:** the runtime is trim- and Native AOT-safe for net8.0, net9.0 and net10.0.
+- **AOT and trimming:** the runtime is trim- and Native AOT-safe for net9.0, net10.0 and net11.0.
 - **Allocations:**
   - Messages are size-first encoded straight into the transport buffer, with no intermediate buffers.
   - Multi-segment requests are read through a pooled buffer.

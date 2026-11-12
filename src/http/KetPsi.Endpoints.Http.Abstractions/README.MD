@@ -1,7 +1,7 @@
 # KetPsi.Endpoints.Http.Abstractions
 
 [![NuGet](https://img.shields.io/nuget/v/KetPsi.Endpoints.Http.Abstractions.svg)](https://www.nuget.org/packages/KetPsi.Endpoints.Http.Abstractions/)
-[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-9.0%20%7C%2010.0%20%7C%2011.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 
@@ -87,5 +87,5 @@ KetPsi.Endpoints.Http                 ← MapGet/MapPost, generators, AspNetCore
 ## Compatibility
 
 - **Namespace:** `KetPsi.Endpoints.Http` (stable; not `…Http.Abstractions`)
-- **Target frameworks:** aligned with `KetPsi.Endpoints.Http` (e.g. `net8.0+`)
+- **Target frameworks:** aligned with `KetPsi.Endpoints.Http` (`net9.0+`)
 - **Breaking changes:** none relative to configuration types previously shipped inside `KetPsi.Endpoints.Http`

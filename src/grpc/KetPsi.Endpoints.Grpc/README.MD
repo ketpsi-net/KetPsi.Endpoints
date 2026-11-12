@@ -231,7 +231,7 @@ Each assembly containing `MapGrpc` gets a generated `KetPsi.Endpoints.Grpc.Gener
 | `KetPsi.Endpoints.Grpc.Abstractions` | Proto type configuration |
 | `KetPsi.Endpoints.Grpc` | Runtime and extensions; ships the generator and analyzer in `analyzers/dotnet/cs` |
 
-Target frameworks: `net8.0`, `net9.0`, `net10.0`. The runtime is trimming and Native AOT compatible (no reflection on the request path).
+Target frameworks: `net9.0`, `net10.0`, `net11.0`. The runtime is trimming and Native AOT compatible (no reflection on the request path).
 
 ---
 

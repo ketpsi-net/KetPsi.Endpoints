@@ -99,15 +99,12 @@ public static class KetPsiEndpointMetadata
         => T.PopulateMetadata(parameter, builder);
 
     /// <summary>
-    /// Adds <c>IParameterBindingMetadata</c> (.NET 9+) for a handler parameter so ApiExplorer / OpenAPI describe it
-    /// without reflection-based inference (RDF/RDG add the same metadata). No-op on .NET 8 (ApiExplorer reads the
-    /// <see cref="MethodInfo"/> metadata instead).
+    /// Adds <c>IParameterBindingMetadata</c> for a handler parameter so ApiExplorer / OpenAPI describe it
+    /// without reflection-based inference (RDF/RDG add the same metadata).
     /// </summary>
     public static void AddParameter(EndpointBuilder builder, ParameterInfo parameter, bool hasTryParse, bool hasBindAsync, bool isOptional)
     {
-#if NET9_0_OR_GREATER
         builder.Metadata.Add(new ParameterBindingMetadata(parameter.Name ?? string.Empty, parameter, hasTryParse, hasBindAsync, isOptional));
-#endif
     }
 
     /// <summary>
@@ -116,15 +113,12 @@ public static class KetPsiEndpointMetadata
     /// </summary>
     public static void AddAsParametersMember(EndpointBuilder builder, MethodInfo method, PropertyInfo? property, bool hasTryParse, bool hasBindAsync, bool isOptional)
     {
-#if NET9_0_OR_GREATER
         if (property is null)
             return;
         var parameter = new PropertyParameterInfo(property, method);
         builder.Metadata.Add(new ParameterBindingMetadata(property.Name, parameter, hasTryParse, hasBindAsync, isOptional));
-#endif
     }
 
-#if NET9_0_OR_GREATER
     private sealed class ParameterBindingMetadata(string name, ParameterInfo parameterInfo, bool hasTryParse, bool hasBindAsync, bool isOptional)
         : IParameterBindingMetadata
     {
@@ -157,7 +151,6 @@ public static class KetPsiEndpointMetadata
         public override bool IsDefined(Type attributeType, bool inherit) => _property.IsDefined(attributeType, inherit);
         public override IList<CustomAttributeData> GetCustomAttributesData() => _property.GetCustomAttributesData();
     }
-#endif
 
     private sealed class AntiforgeryRequiredMetadata : IAntiforgeryMetadata
     {
